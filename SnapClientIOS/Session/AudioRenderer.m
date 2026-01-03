@@ -8,107 +8,81 @@
 #import "AudioRenderer.h"
 @import AVFoundation;
 
-#define NUM_BUFFERS 3
-#define BUFFER_SIZE 19200
-
-@interface AudioRenderer () {
-    AudioQueueRef audioQueue;
-    AudioQueueBufferRef audioQueueBuffers[NUM_BUFFERS];
-    TPCircularBuffer pcmCircularBuffer;
-}
+@interface AudioRenderer ()
 
 @property (nonatomic, strong) StreamInfo *streamInfo;
+@property (nonatomic, strong) TimeProvider *timeProvider;
+@property (nonatomic, strong) AVAudioEngine *engine;
+@property (nonatomic, strong) AVAudioPlayerNode *playerNode;
+@property (nonatomic, strong) AVAudioFormat *audioFormat;
 
 @end
 
 @implementation AudioRenderer
 
-- (instancetype)initWithStreamInfo:(StreamInfo *)info {
+- (instancetype)initWithStreamInfo:(StreamInfo *)info timeProvider:(TimeProvider *)timeProvider {
     if (self = [super init]) {
         self.streamInfo = info;
-        TPCircularBufferInit(&pcmCircularBuffer, 65536);
-        [self initAudioQueue];
+        self.timeProvider = timeProvider;
+        [self initAudioEngine];
     }
     return self;
 }
 
-- (void)initAudioQueue {
-    AudioStreamBasicDescription format;
-    format.mSampleRate = self.streamInfo.sampleRate;
-    format.mFormatID = kAudioFormatLinearPCM;
-    format.mFormatFlags = kLinearPCMFormatFlagIsSignedInteger;
-    format.mBitsPerChannel = self.streamInfo.bitsPerSample;
-    format.mChannelsPerFrame = self.streamInfo.channels;
-    format.mBytesPerFrame = self.streamInfo.frameSize;
-    format.mFramesPerPacket = 1;
-    format.mBytesPerPacket = format.mBytesPerFrame * format.mFramesPerPacket;
-    format.mReserved = 0;
-
-    // create the audio queue
-    OSStatus err = AudioQueueNewOutput(&format, audioQueueCallback, (__bridge void *)(self), NULL, NULL, 0, &audioQueue);
-    if (err != noErr) {
-        
+- (void)initAudioEngine {
+    self.engine = [[AVAudioEngine alloc] init];
+    self.playerNode = [[AVAudioPlayerNode alloc] init];
+    
+    [self.engine attachNode:self.playerNode];
+    
+    // Create Audio Format (16-bit Int is standard for Snapcast FLAC)
+    // AVAudioFormat usually prefers Float32. We might need to convert or tell it to handle Int16.
+    // Snapserver sends Interleaved Int16 usually.
+    // AVAudioCommonFormat: AVAudioPCMFormatInt16
+    self.audioFormat = [[AVAudioFormat alloc] initWithCommonFormat:AVAudioPCMFormatInt16
+                                                        sampleRate:self.streamInfo.sampleRate
+                                                          channels:self.streamInfo.channels
+                                                       interleaved:YES];
+    
+    [self.engine connect:self.playerNode to:self.engine.mainMixerNode format:self.audioFormat];
+    
+    NSError *error = nil;
+    if (![self.engine startAndReturnError:&error]) {
+        NSLog(@"Error starting AVAudioEngine: %@", error);
     }
     
-    // allocate some audio queue buffers
-    for (int i = 0; i < NUM_BUFFERS; i++) {
-        AudioQueueAllocateBuffer(audioQueue, BUFFER_SIZE, &audioQueueBuffers[i]);
-        audioQueueBuffers[i]->mAudioDataByteSize = BUFFER_SIZE;
-        audioQueueCallback((__bridge void *)(self), audioQueue, audioQueueBuffers[i]);
-    }
-    
-    //AudioQueuePrime(audioQueue, 0, NULL);
-    
-    err = AudioQueueStart(audioQueue, NULL);
-    if (err != noErr) {
-        NSLog(@"Error occurred starting AudioQueue: %d", err);
-    }
+    [self.playerNode play];
 }
 
 - (void)feedPCMData:(NSData *)pcmData serverSec:(int32_t)sec serverUsec:(int32_t)usec {
-    // Phase C: Use sec/usec to calculate playTime
+    // 1. Create Buffer
+    // We need to copy bytes into AVAudioPCMBuffer
+    // AVAudioPCMBuffer for Int16 Interleaved provides int16ChannelData (if deinterleaved) or...
+    // Wait, AVAudioPCMBuffer doesn't easily support Interleaved access via int16ChannelData if it's Int16?
+    // Actually, initWithCommonFormat:AVAudioPCMFormatInt16 interleaved:YES
+    // buffer.int16ChannelData[0] points to the interleaved buffer.
     
-    // TPCircularBuffer is thread-safe for single producer / single consumer
-    if (!TPCircularBufferProduceBytes(&pcmCircularBuffer, [pcmData bytes], (uint32_t)pcmData.length)) {
-        NSLog(@"Error writing to the AudioRenderer circular buffer!");
-    }
-}
-
-void audioQueueCallback(void *inUserData, AudioQueueRef inAQ, AudioQueueBufferRef inBuffer) {
-    AudioRenderer *THIS = (__bridge AudioRenderer *)inUserData;
+    AVAudioFrameCount frameCount = (AVAudioFrameCount)(pcmData.length / self.audioFormat.streamDescription->mBytesPerFrame);
+    AVAudioPCMBuffer *buffer = [[AVAudioPCMBuffer alloc] initWithPCMFormat:self.audioFormat frameCapacity:frameCount];
+    buffer.frameLength = frameCount;
     
-    uint32_t audioQueueBufferRequestedSize = inBuffer->mAudioDataByteSize;
-    SInt16 *targetBuffer = inBuffer->mAudioData;
+    // Copy data
+    memcpy(buffer.int16ChannelData[0], pcmData.bytes, pcmData.length);
     
-    // pull audio from circular buffer
-    uint32_t availableBytesFromCircularBuffer;
-    SInt16 *buffer = TPCircularBufferTail(&THIS->pcmCircularBuffer, &availableBytesFromCircularBuffer);
+    // 2. Calculate Timestamp
+    double serverTimeMs = (sec * 1000.0) + (usec / 1000.0);
+    double latencyMs = 1000.0; // Hardcoded 1s latency for now (matches Snapcast default)
+    double targetPlayTimeMs = serverTimeMs + latencyMs;
     
-    if (availableBytesFromCircularBuffer > 0) {
-        if (availableBytesFromCircularBuffer > audioQueueBufferRequestedSize) {
-            memcpy(targetBuffer, buffer, audioQueueBufferRequestedSize);
-            TPCircularBufferConsume(&THIS->pcmCircularBuffer, audioQueueBufferRequestedSize);
-        } else {
-            // audioQueueBuffer is requesting more data than what we have
-            // in the circular buffer - give it everything we've got then
-            // top up with silence (0s) at the end
-            memset(targetBuffer, 0, audioQueueBufferRequestedSize);
-            memcpy(targetBuffer, buffer, availableBytesFromCircularBuffer);
-            TPCircularBufferConsume(&THIS->pcmCircularBuffer, availableBytesFromCircularBuffer);
-        }
-    } else {
-        // we have nothing to offer the audioQueueBuffer
-        // fill the buffer with 0s
-        //memcpy(targetBuffer, (void *)memcpy, audioQueueBufferRequestedSize);
-        memset(targetBuffer, 0, audioQueueBufferRequestedSize);
-    }
+    uint64_t machTime = [self.timeProvider machTimeForServerTimeMs:targetPlayTimeMs];
     
-    OSStatus error = AudioQueueEnqueueBuffer(inAQ, inBuffer, 0, NULL);
-    if (error != noErr) {
-        NSLog(@"Error enqueuing buffer: %d", error);
-    } else {
-        //NSLog(@"Enqueued audioQueue buffer");
-    }
+    AVAudioTime *audioTime = [[AVAudioTime alloc] initWithHostTime:machTime];
+    
+    // 3. Schedule
+    [self.playerNode scheduleBuffer:buffer atTime:audioTime completionHandler:nil];
+    
+    // Safety check: If machTime is in the past, AVAudioEngine usually plays immediately.
+    // If it's too far in future, it waits.
 }
 
 @end
