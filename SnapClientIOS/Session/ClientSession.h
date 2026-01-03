@@ -11,6 +11,9 @@ NS_ASSUME_NONNULL_BEGIN
 
 @interface ClientSession : NSObject
 
+@property (nonatomic, strong, readonly) NSString *host;
+@property (nonatomic, assign, readonly) NSUInteger port;
+
 - (instancetype)initWithSnapServerHost:(NSString *)host port:(NSUInteger)port;
 - (void)start;
 
