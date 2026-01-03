@@ -15,6 +15,7 @@ NS_ASSUME_NONNULL_BEGIN
 
 - (instancetype)initWithStreamInfo:(StreamInfo *)info timeProvider:(TimeProvider *)timeProvider;
 - (void)feedPCMData:(NSData *)pcmData serverSec:(int32_t)sec serverUsec:(int32_t)usec;
+- (void)setLatency:(NSInteger)latencyMs;
 
 @end
 

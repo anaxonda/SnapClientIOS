@@ -241,6 +241,7 @@ typedef enum : uint16_t {
         NSLog(@"Error deserializing ServerSettings: %@", error);
     } else {
         NSLog(@"ServerSettings: %@", serverSettings);
+        [self.delegate socketHandler:self didReceiveServerSettings:serverSettings];
     }
 }
 
