@@ -16,6 +16,7 @@ NS_ASSUME_NONNULL_BEGIN
 
 - (instancetype)initWithSnapServerHost:(NSString *)host port:(NSUInteger)port;
 - (void)start;
+- (void)setStreamId:(NSString *)streamId forGroupId:(NSString *)groupId;
 
 @end
 

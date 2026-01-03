@@ -10,10 +10,12 @@
 #import "FlacDecoder.h"
 #import "AudioRenderer.h"
 #import "TimeProvider.h"
+#import "RpcHandler.h"
 
-@interface ClientSession () <SocketHandlerDelegate, FlacDecoderDelegate>
+@interface ClientSession () <SocketHandlerDelegate, FlacDecoderDelegate, RpcHandlerDelegate>
 
 @property (strong, nonatomic) SocketHandler *socketHandler;
+@property (strong, nonatomic) RpcHandler *rpcHandler;
 @property (strong, nonatomic) FlacDecoder *flacDecoder;
 @property (strong, nonatomic) AudioRenderer *audioRenderer;
 @property (strong, nonatomic) TimeProvider *timeProvider;
@@ -29,6 +31,11 @@
         _port = port;
         self.timeProvider = [[TimeProvider alloc] init];
         self.socketHandler = [[SocketHandler alloc] initWithSnapServerHost:host port:port delegate:self];
+        
+        // Initialize RPC Handler (Port 1705 hardcoded for now, or assume port+1?)
+        // Snap.Net implies 1705 is standard.
+        self.rpcHandler = [[RpcHandler alloc] initWithHost:host port:1705];
+        self.rpcHandler.delegate = self;
     }
     return self;
 }
@@ -36,10 +43,24 @@
 - (void)start {
     // Start Sync Timer (every 1 second)
     self.syncTimer = [NSTimer scheduledTimerWithTimeInterval:1.0 target:self selector:@selector(sendSync) userInfo:nil repeats:YES];
+    
+    // Connect RPC
+    [self.rpcHandler connect];
+}
+
+#pragma mark - RpcHandlerDelegate
+- (void)rpcHandler:(RpcHandler *)handler didReceiveServerStatus:(NSDictionary *)status {
+    NSLog(@"RPC Status Received: %@", status);
+    // TODO: Notify UI about streams
+    [[NSNotificationCenter defaultCenter] postNotificationName:@"SnapClientServerStatusUpdated" object:nil userInfo:status];
 }
 
 - (void)sendSync {
     [self.socketHandler sendTime];
+}
+
+- (void)setStreamId:(NSString *)streamId forGroupId:(NSString *)groupId {
+    [self.rpcHandler setStreamId:streamId forGroupId:groupId];
 }
 
 - (void)dealloc {
