@@ -189,12 +189,17 @@ typedef enum : uint16_t {
     }
     
     if (tag == MESSAGE_TYPE_WIRE_CHUNK) {
+        int32_t sec;
+        int32_t usec;
+        [data getBytes:&sec range:NSMakeRange(0, 4)];
+        [data getBytes:&usec range:NSMakeRange(4, 4)];
+        
         // get the payload size
         uint32_t payloadSize;
-        [data getBytes:&payloadSize range:NSMakeRange(sizeof(int32_t) + sizeof(int32_t), sizeof(uint32_t))];
+        [data getBytes:&payloadSize range:NSMakeRange(8, 4)];
         
-        NSData *payload = [data subdataWithRange:NSMakeRange(sizeof(int32_t) + sizeof(int32_t) + sizeof(uint32_t), payloadSize)];
-        [self handleWireChunkPayload:payload];
+        NSData *payload = [data subdataWithRange:NSMakeRange(12, payloadSize)];
+        [self handleWireChunkPayload:payload sec:sec usec:usec];
     }
     
     if (tag == MESSAGE_TYPE_SERVER_SETTINGS) {
@@ -225,8 +230,8 @@ typedef enum : uint16_t {
     [self readNextMessage:sock];
 }
 
-- (void)handleWireChunkPayload:(NSData *)payload {
-    [self.delegate socketHandler:self didReceiveAudioData:payload];
+- (void)handleWireChunkPayload:(NSData *)payload sec:(int32_t)sec usec:(int32_t)usec {
+    [self.delegate socketHandler:self didReceiveAudioData:payload serverSec:sec serverUsec:usec];
 }
 
 - (void)handleServerSettingsJSONPayload:(NSData *)payload {

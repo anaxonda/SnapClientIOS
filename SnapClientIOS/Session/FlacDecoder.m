@@ -22,6 +22,8 @@
 }
 
 @property (atomic) BOOL isDecoding;
+@property (atomic, assign) int32_t currentSec;
+@property (atomic, assign) int32_t currentUsec;
 
 @end
 
@@ -60,7 +62,7 @@
     FLAC__stream_decoder_process_until_end_of_metadata(decoder);
 }
 
-- (BOOL)feedAudioData:(NSData *)audioData {
+- (BOOL)feedAudioData:(NSData *)audioData serverSec:(int32_t)sec serverUsec:(int32_t)usec {
     if (&streamInfo == NULL) {
         NSLog(@"streamInfo is still NULL, ignoring the audio data for now");
         return NO;
@@ -70,33 +72,33 @@
         return NO;
     }
     
-    if (!self.isDecoding) {
-        [self decode];
-    }
+    // We update timestamp and trigger decode on the serial queue to ensure correct association
+    // (Assuming one feed = one decode batch roughly, or close enough)
+    dispatch_async(decoderQueue, ^{
+        self.currentSec = sec;
+        self.currentUsec = usec;
+        [self decodeInternal];
+    });
     
     return YES;
 }
 
-- (void)decode {
-    if (self.isDecoding) return;
+- (void)decodeInternal {
+    self.isDecoding = YES;
     
-    dispatch_async(decoderQueue, ^{
-        self.isDecoding = YES;
-        
-        uint32_t availableBytesFromCircularBuffer;
-        TPCircularBufferTail(&self->circularBuffer, &availableBytesFromCircularBuffer);
+    uint32_t availableBytesFromCircularBuffer;
+    TPCircularBufferTail(&self->circularBuffer, &availableBytesFromCircularBuffer);
 
-        while (availableBytesFromCircularBuffer > 0) {
-            if (!FLAC__stream_decoder_process_single(self->decoder)) {
-                NSLog(@"Error occurred during decoding!");
-                self.isDecoding = NO;
-                return;
-            }
-            TPCircularBufferTail(&self->circularBuffer, &availableBytesFromCircularBuffer);
+    while (availableBytesFromCircularBuffer > 0) {
+        if (!FLAC__stream_decoder_process_single(self->decoder)) {
+            NSLog(@"Error occurred during decoding!");
+            self.isDecoding = NO;
+            return;
         }
-        
-        self.isDecoding = NO;
-    });
+        TPCircularBufferTail(&self->circularBuffer, &availableBytesFromCircularBuffer);
+    }
+    
+    self.isDecoding = NO;
 }
 
 FLAC__StreamDecoderReadStatus read_cb(const FLAC__StreamDecoder *decoder, FLAC__byte buffer[], size_t *bytes, void *client_data) {
@@ -144,7 +146,7 @@ FLAC__StreamDecoderWriteStatus write_cb(const FLAC__StreamDecoder *decoder, cons
     NSData *pcmData = [NSData dataWithBytes:pcmBuffer length:(NSUInteger)bytes];
     free(pcmBuffer);
     
-    [THIS.delegate decoder:THIS didDecodePCMData:pcmData];
+    [THIS.delegate decoder:THIS didDecodePCMData:pcmData serverSec:THIS.currentSec serverUsec:THIS.currentUsec];
     return FLAC__STREAM_DECODER_WRITE_STATUS_CONTINUE;
 }
 
