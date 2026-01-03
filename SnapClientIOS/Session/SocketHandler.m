@@ -20,6 +20,12 @@ typedef enum : uint16_t {
 
 @interface SocketHandler () <GCDAsyncSocketDelegate> {
     dispatch_queue_t queue;
+    
+    // Temp storage for timestamps from the Base Message Header
+    int32_t _serverRecvSec;
+    int32_t _serverRecvUsec;
+    int32_t _serverSentSec;
+    int32_t _serverSentUsec;
 }
 
 @property (nonatomic, copy) NSString *serverHost;
@@ -83,6 +89,40 @@ typedef enum : uint16_t {
     [self readNextMessage:self.socket];
 }
 
+- (void)disconnect {
+    if (self.socket) {
+        [self.socket disconnect];
+    }
+}
+
+- (void)sendTime {
+    NSMutableData *data = [[NSMutableData alloc] init];
+    uint16_t type = 4; // MESSAGE_TYPE_TIME
+    uint16_t idField = 0;
+    uint16_t refersToField = 0;
+    int32_t serverReceivedSeconds = 0;
+    int32_t serverReceivedMicroseconds = 0;
+    
+    // Current time
+    NSTimeInterval now = [[NSDate date] timeIntervalSince1970];
+    int32_t clientSentSeconds = (int32_t)now;
+    int32_t clientSentMicroseconds = (int32_t)((now - clientSentSeconds) * 1000000);
+    
+    [data appendBytes:&type length:sizeof(uint16_t)];
+    [data appendBytes:&idField length:sizeof(uint16_t)];
+    [data appendBytes:&refersToField length:sizeof(uint16_t)];
+    [data appendBytes:&serverReceivedSeconds length:sizeof(int32_t)];
+    [data appendBytes:&serverReceivedMicroseconds length:sizeof(int32_t)];
+    [data appendBytes:&clientSentSeconds length:sizeof(int32_t)];
+    [data appendBytes:&clientSentMicroseconds length:sizeof(int32_t)];
+    
+    // Time message has 0 payload length
+    uint32_t payloadLen = 0;
+    [data appendBytes:&payloadLen length:sizeof(uint32_t)];
+    
+    [self.socket writeData:data withTimeout:-1 tag:4];
+}
+
 - (NSMutableData *)baseMessage {
     NSMutableData *base = [[NSMutableData alloc] init];
     uint16_t type = 5;
@@ -122,7 +162,12 @@ typedef enum : uint16_t {
         uint16_t messageType;
         [data getBytes:&messageType length:sizeof(uint16_t)];
         
-        //NSLog(@"BASE_MESSAGE: Reeived message of type %d", messageType);
+        // Extract timestamps from header (Offset 6 bytes: Type(2)+ID(2)+Ref(2) = 6)
+        // Actually: Type(2), ID(2), Ref(2) = 6 bytes
+        [data getBytes:&_serverRecvSec range:NSMakeRange(6, 4)];
+        [data getBytes:&_serverRecvUsec range:NSMakeRange(10, 4)];
+        [data getBytes:&_serverSentSec range:NSMakeRange(14, 4)];
+        [data getBytes:&_serverSentUsec range:NSMakeRange(18, 4)];
         
         // advance to the field storing the length of the typed message
         NSUInteger lengthToAdvance = sizeof(uint16_t) + sizeof(uint16_t) + sizeof(uint16_t) + sizeof(int32_t) + sizeof(int32_t) + sizeof(int32_t) + sizeof(int32_t);
@@ -224,7 +269,13 @@ typedef enum : uint16_t {
 }
 
 - (void)handleTimePayload:(NSData *)data {
-    NSLog(@"Time: (snipped)");
+    // Notify delegate with stored timestamps
+    [self.delegate socketHandler:self 
+          didReceiveTimeAtClient:[NSDate date]
+               serverReceivedSec:_serverRecvSec
+              serverReceivedUsec:_serverRecvUsec
+                   serverSentSec:_serverSentSec
+                  serverSentUsec:_serverSentUsec];
 }
 
 @end
