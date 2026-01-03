@@ -150,6 +150,16 @@
         NSInteger latency = [settings[@"latency"] integerValue];
         [self.audioRenderer setLatency:latency];
     }
+    
+    if (settings[@"volume"]) {
+        NSInteger vol = [settings[@"volume"] integerValue];
+        [self.audioRenderer setVolume:(float)vol / 100.0];
+    }
+    
+    if (settings[@"muted"]) {
+        BOOL muted = [settings[@"muted"] boolValue];
+        [self.audioRenderer setMuted:muted];
+    }
 }
 
 #pragma mark - FlacDecoderDelegate

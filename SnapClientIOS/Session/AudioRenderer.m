@@ -16,6 +16,8 @@
 @property (nonatomic, strong) AVAudioPlayerNode *playerNode;
 @property (nonatomic, strong) AVAudioFormat *audioFormat;
 @property (nonatomic, assign) NSInteger latencyMs;
+@property (nonatomic, assign) float currentVolume;
+@property (nonatomic, assign) BOOL isMuted;
 
 @end
 
@@ -26,6 +28,8 @@
         self.streamInfo = info;
         self.timeProvider = timeProvider;
         self.latencyMs = 1000; // Default
+        self.currentVolume = 1.0;
+        self.isMuted = NO;
         [self initAudioEngine];
     }
     return self;
@@ -34,6 +38,21 @@
 - (void)setLatency:(NSInteger)latencyMs {
     self.latencyMs = latencyMs;
     NSLog(@"AudioRenderer: Latency updated to %ld ms", (long)latencyMs);
+}
+
+- (void)setVolume:(float)volume {
+    self.currentVolume = volume;
+    [self updateVolume];
+}
+
+- (void)setMuted:(BOOL)muted {
+    self.isMuted = muted;
+    [self updateVolume];
+}
+
+- (void)updateVolume {
+    float effectiveVolume = self.isMuted ? 0.0 : self.currentVolume;
+    self.playerNode.volume = effectiveVolume;
 }
 
 - (void)initAudioEngine {
