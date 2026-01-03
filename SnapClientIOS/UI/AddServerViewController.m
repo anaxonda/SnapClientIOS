@@ -7,6 +7,9 @@
 
 #import "AddServerViewController.h"
 #import "AppDelegate.h"
+#import <arpa/inet.h>
+#import <netinet/in.h>
+#import <sys/socket.h>
 
 @interface AddServerViewController () <NSNetServiceBrowserDelegate, NSNetServiceDelegate>
 
@@ -53,6 +56,9 @@
     for (UITextField *textField in textFields) {
         [textField addTarget:self action:@selector(textFieldDidChange:) forControlEvents:UIControlEventEditingChanged];
     }
+    
+    // Initial validation state
+    [self textFieldDidChange:nil];
 }
 
 - (void)scan {
@@ -60,20 +66,20 @@
     self.browser.delegate = self;
     [self.browser searchForServicesOfType:@"_snapcast._tcp." inDomain:@"local."];
     
-    // Show spinner or alert "Scanning..."
     [self.services removeAllObjects];
     
-    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"Scanning..." message:nil preferredStyle:UIAlertControllerStyleActionSheet];
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"Scanning..." message:@"Looking for Snapcast servers..." preferredStyle:UIAlertControllerStyleAlert];
     [alert addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:^(UIAlertAction * _Nonnull action) {
         [self.browser stop];
     }]];
     
-    // Store alert ref to dismiss later or append actions
-    // Actually, dynamic updating of alert actions is tricky.
-    // Better: Wait 2 seconds then show list.
+    [self presentViewController:alert animated:YES completion:nil];
     
+    // Wait 2 seconds then show list
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-        [self showFoundServices];
+        [self dismissViewControllerAnimated:YES completion:^{
+            [self showFoundServices];
+        }];
     });
 }
 
@@ -81,6 +87,10 @@
     [self.browser stop];
     
     UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"Found Servers" message:nil preferredStyle:UIAlertControllerStyleActionSheet];
+    
+    if (self.services.count == 0) {
+        alert.title = @"No Servers Found";
+    }
     
     for (NSNetService *service in self.services) {
         [alert addAction:[UIAlertAction actionWithTitle:service.name style:UIAlertActionStyleDefault handler:^(UIAlertAction * _Nonnull action) {
@@ -104,14 +114,12 @@
 
 #pragma mark - NSNetServiceDelegate
 - (void)netServiceDidResolveAddress:(NSNetService *)sender {
-    // Get IP and Port
     NSString *host = nil;
     NSInteger port = sender.port;
     
-    // Extract IP from addresses
     for (NSData *address in sender.addresses) {
         struct sockaddr_in *socketAddress = (struct sockaddr_in *)[address bytes];
-        if (socketAddress->sin_family == AF_INET) { // IPv4
+        if (socketAddress->sin_family == AF_INET) {
             char str[INET_ADDRSTRLEN];
             inet_ntop(AF_INET, &(socketAddress->sin_addr), str, INET_ADDRSTRLEN);
             host = [NSString stringWithUTF8String:str];
@@ -122,8 +130,10 @@
     if (host) {
         self.hostField.text = host;
         self.portField.text = [NSString stringWithFormat:@"%ld", (long)port];
-        self.nameField.text = sender.name; // Auto-fill name
-        [self textFieldDidChange:nil]; // Update save button state
+        if (self.nameField.text.length == 0) {
+            self.nameField.text = sender.name;
+        }
+        [self textFieldDidChange:nil];
     }
 }
 
@@ -133,27 +143,8 @@
 }
 
 - (void)textFieldDidChange:(UITextField *)sender {
-    self.navigationItem.rightBarButtonItems[0].enabled = [self canSave];
-}
-
-- (void)save {
-"Edit Server";
-        self.nameField.text = [self.existingServer valueForKey:@"name"];
-        self.hostField.text = [self.existingServer valueForKey:@"host"];
-        self.portField.text = [NSString stringWithFormat:@"%ld", (long)[[self.existingServer valueForKey:@"port"] integerValue]];
-    } else {
-        self.navigationItem.title = @"Add Server";
-    }
-    
-    // listen for textFieldDidChange events
-    NSArray *textFields = @[self.nameField, self.hostField, self.portField];
-    for (UITextField *textField in textFields) {
-        [textField addTarget:self action:@selector(textFieldDidChange:) forControlEvents:UIControlEventEditingChanged];
-    }
-}
-
-- (void)textFieldDidChange:(UITextField *)sender {
-    self.navigationItem.rightBarButtonItem.enabled = [self canSave];
+    UIBarButtonItem *saveBtn = self.navigationItem.rightBarButtonItems[0];
+    saveBtn.enabled = [self canSave];
 }
 
 - (void)save {
@@ -185,7 +176,6 @@
             return NO;
         }
     }
-    
     return YES;
 }
 
