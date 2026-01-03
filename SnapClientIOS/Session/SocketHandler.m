@@ -61,15 +61,18 @@ typedef enum : uint16_t {
     
     NSMutableData *base = [self baseMessage];
     
+    NSString *clientName = [[NSUserDefaults standardUserDefaults] stringForKey:@"ClientName"] ?: @"SnapClientIOS";
+    NSString *hostName = [[NSUserDefaults standardUserDefaults] stringForKey:@"HostName"] ?: [[UIDevice currentDevice] name];
+    
     // generate and send the Hello message
     NSDictionary *helloMessage = @{
-        @"Arch": @"x86_64",
-        @"ClientName": @"SnapClientIOS",
-        @"HostName": @"MyHostname",
-        @"ID": @"00:11:22:33:44:55",
+        @"Arch": @"x86_64", // Should be arm64, but keeping compatibility
+        @"ClientName": clientName,
+        @"HostName": hostName,
+        @"ID": @"00:11:22:33:44:55", // Unique ID TODO: Generate UUID once and store
         @"Instance": @1,
         @"MAC": @"00:11:22:33:44:55",
-        @"OS": @"Arch Linux",
+        @"OS": @"iOS",
         @"SnapStreamProtocolVersion": @2,
         @"Version": @"0.17.1"
     };
@@ -250,11 +253,15 @@ typedef enum : uint16_t {
 
 - (void)handleStreamTagsJSONPayload:(NSData *)payload {
     NSError *error = nil;
-    //NSDictionary *streamTags = [NSJSONSerialization JSONObjectWithData:payload options:0 error:&error];
+    NSDictionary *streamTags = [NSJSONSerialization JSONObjectWithData:payload options:0 error:&error];
     if (error) {
         NSLog(@"Error deserializing StreamTags: %@", error);
     } else {
-        NSLog(@"StreamTags: (snipped)");
+        // format: { "STREAM": { "ARTIST": "...", "TITLE": "...", "COVERART": "..." } }
+        NSLog(@"StreamTags Received");
+        if (streamTags[@"STREAM"]) {
+            [self.delegate socketHandler:self didReceiveStreamTags:streamTags[@"STREAM"]];
+        }
     }
 }
 

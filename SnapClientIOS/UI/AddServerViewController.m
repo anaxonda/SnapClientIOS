@@ -26,14 +26,22 @@
     AppDelegate *appDelegate = (AppDelegate *)[UIApplication sharedApplication].delegate;
     self.pc = appDelegate.persistentContainer;
     
-    self.navigationItem.title = @"Add Server";
     self.navigationItem.leftBarButtonItem = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemCancel target:self action:@selector(cancel)];
     self.navigationItem.rightBarButtonItem = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemSave target:self action:@selector(save)];
+    
+    if (self.existingServer) {
+        self.navigationItem.title = @"Edit Server";
+        self.nameField.text = [self.existingServer valueForKey:@"name"];
+        self.hostField.text = [self.existingServer valueForKey:@"host"];
+        self.portField.text = [NSString stringWithFormat:@"%ld", (long)[[self.existingServer valueForKey:@"port"] integerValue]];
+    } else {
+        self.navigationItem.title = @"Add Server";
+    }
     
     // listen for textFieldDidChange events
     NSArray *textFields = @[self.nameField, self.hostField, self.portField];
     for (UITextField *textField in textFields) {
-        [textField addTarget:self action:@selector(textFieldDidChange:) forControlEvents:UIControlEventValueChanged];
+        [textField addTarget:self action:@selector(textFieldDidChange:) forControlEvents:UIControlEventEditingChanged];
     }
 }
 
@@ -42,9 +50,20 @@
 }
 
 - (void)save {
-    [self.pc addServerWithName:self.nameField.text
-                          host:self.hostField.text
-                          port:self.portField.text.integerValue];
+    if (self.existingServer) {
+        [self.existingServer setValue:self.nameField.text forKey:@"name"];
+        [self.existingServer setValue:self.hostField.text forKey:@"host"];
+        [self.existingServer setValue:@(self.portField.text.integerValue) forKey:@"port"];
+        
+        NSError *error = nil;
+        if (![self.pc.viewContext save:&error]) {
+            NSLog(@"Error saving context: %@", error);
+        }
+    } else {
+        [self.pc addServerWithName:self.nameField.text
+                              host:self.hostField.text
+                              port:self.portField.text.integerValue];
+    }
     [self dismissViewControllerAnimated:YES completion:NULL];
 }
 
