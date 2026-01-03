@@ -15,6 +15,7 @@
 @property (nonatomic, strong) AVAudioEngine *engine;
 @property (nonatomic, strong) AVAudioPlayerNode *playerNode;
 @property (nonatomic, strong) AVAudioFormat *audioFormat;
+@property (nonatomic, assign) NSInteger latencyMs;
 
 @end
 
@@ -24,12 +25,26 @@
     if (self = [super init]) {
         self.streamInfo = info;
         self.timeProvider = timeProvider;
+        self.latencyMs = 1000; // Default
         [self initAudioEngine];
     }
     return self;
 }
 
+- (void)setLatency:(NSInteger)latencyMs {
+    self.latencyMs = latencyMs;
+    NSLog(@"AudioRenderer: Latency updated to %ld ms", (long)latencyMs);
+}
+
 - (void)initAudioEngine {
+    // Configure Audio Session
+    AVAudioSession *session = [AVAudioSession sharedInstance];
+    NSError *error = nil;
+    [session setCategory:AVAudioSessionCategoryPlayback error:&error];
+    if (error) NSLog(@"Error setting category: %@", error);
+    [session setActive:YES error:&error];
+    if (error) NSLog(@"Error activating session: %@", error);
+
     self.engine = [[AVAudioEngine alloc] init];
     self.playerNode = [[AVAudioPlayerNode alloc] init];
     
@@ -72,7 +87,7 @@
     
     // 3. Calculate Timestamp
     double serverTimeMs = (sec * 1000.0) + (usec / 1000.0);
-    double latencyMs = 1000.0; // Hardcoded 1s latency
+    double latencyMs = (double)self.latencyMs;
     double targetPlayTimeMs = serverTimeMs + latencyMs;
     
     uint64_t machTime = [self.timeProvider machTimeForServerTimeMs:targetPlayTimeMs];

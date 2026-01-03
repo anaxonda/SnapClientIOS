@@ -72,6 +72,13 @@
     [self.timeProvider setDiffWithC2S:(serverReceivedMs - (clientReceivedMs - 5)) s2c:(clientReceivedMs - serverSentMs)];
 }
 
+- (void)socketHandler:(SocketHandler *)socketHandler didReceiveServerSettings:(NSDictionary *)settings {
+    if (settings[@"latency"]) {
+        NSInteger latency = [settings[@"latency"] integerValue];
+        [self.audioRenderer setLatency:latency];
+    }
+}
+
 #pragma mark - FlacDecoderDelegate
 - (void)decoder:(FlacDecoder *)decoder didDecodePCMData:(NSData *)pcmData serverSec:(int32_t)sec serverUsec:(int32_t)usec {
     [self.audioRenderer feedPCMData:pcmData serverSec:sec serverUsec:usec];
