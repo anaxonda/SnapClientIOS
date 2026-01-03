@@ -11,6 +11,7 @@
 #import "AudioRenderer.h"
 #import "TimeProvider.h"
 #import "RpcHandler.h"
+@import MediaPlayer;
 
 @interface ClientSession () <SocketHandlerDelegate, FlacDecoderDelegate, RpcHandlerDelegate>
 
@@ -36,8 +37,24 @@
         // Snap.Net implies 1705 is standard.
         self.rpcHandler = [[RpcHandler alloc] initWithHost:host port:1705];
         self.rpcHandler.delegate = self;
+        
+        [self setupRemoteCommandCenter];
     }
     return self;
+}
+
+- (void)setupRemoteCommandCenter {
+    MPRemoteCommandCenter *commandCenter = [MPRemoteCommandCenter sharedCommandCenter];
+    [commandCenter.playCommand setEnabled:YES];
+    [commandCenter.playCommand addTargetWithHandler:^MPRemoteCommandHandlerStatus(MPRemoteCommandEvent * _Nonnull event) {
+        // [self start]; // Already auto-started?
+        return MPRemoteCommandHandlerStatusSuccess;
+    }];
+    [commandCenter.pauseCommand setEnabled:YES];
+    [commandCenter.pauseCommand addTargetWithHandler:^MPRemoteCommandHandlerStatus(MPRemoteCommandEvent * _Nonnull event) {
+        // [self stop]; // Not implemented yet
+        return MPRemoteCommandHandlerStatusSuccess;
+    }];
 }
 
 - (void)start {
@@ -46,6 +63,11 @@
     
     // Connect RPC
     [self.rpcHandler connect];
+    
+    // Initial Now Playing Info
+    NSMutableDictionary *nowPlayingInfo = [[NSMutableDictionary alloc] init];
+    [nowPlayingInfo setObject:@"Snapcast" forKey:MPMediaItemPropertyTitle];
+    [MPNowPlayingInfoCenter defaultCenter].nowPlayingInfo = nowPlayingInfo;
 }
 
 #pragma mark - RpcHandlerDelegate
@@ -53,6 +75,36 @@
     NSLog(@"RPC Status Received: %@", status);
     // TODO: Notify UI about streams
     [[NSNotificationCenter defaultCenter] postNotificationName:@"SnapClientServerStatusUpdated" object:nil userInfo:status];
+}
+
+- (void)socketHandler:(SocketHandler *)socketHandler didReceiveStreamTags:(NSDictionary *)tags {
+    NSMutableDictionary *nowPlayingInfo = [[NSMutableDictionary alloc] initWithDictionary:[MPNowPlayingInfoCenter defaultCenter].nowPlayingInfo];
+    
+    if (tags[@"TITLE"]) {
+        [nowPlayingInfo setObject:tags[@"TITLE"] forKey:MPMediaItemPropertyTitle];
+    }
+    if (tags[@"ARTIST"]) {
+        [nowPlayingInfo setObject:tags[@"ARTIST"] forKey:MPMediaItemPropertyArtist];
+    }
+    if (tags[@"ALBUM"]) {
+        [nowPlayingInfo setObject:tags[@"ALBUM"] forKey:MPMediaItemPropertyAlbumTitle];
+    }
+    
+    // Cover Art (Base64)
+    if (tags[@"COVERART"]) {
+        NSData *imageData = [[NSData alloc] initWithBase64EncodedString:tags[@"COVERART"] options:NSDataBase64DecodingIgnoreUnknownCharacters];
+        if (imageData) {
+            UIImage *image = [UIImage imageWithData:imageData];
+            if (image) {
+                MPMediaItemArtwork *artwork = [[MPMediaItemArtwork alloc] initWithBoundsSize:image.size requestHandler:^UIImage * _Nonnull(CGSize size) {
+                    return image;
+                }];
+                [nowPlayingInfo setObject:artwork forKey:MPMediaItemPropertyArtwork];
+            }
+        }
+    }
+    
+    [MPNowPlayingInfoCenter defaultCenter].nowPlayingInfo = nowPlayingInfo;
 }
 
 - (void)sendSync {

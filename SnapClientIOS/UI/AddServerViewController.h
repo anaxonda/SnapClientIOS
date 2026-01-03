@@ -6,10 +6,13 @@
 //
 
 #import <UIKit/UIKit.h>
+#import <CoreData/CoreData.h>
 
 NS_ASSUME_NONNULL_BEGIN
 
 @interface AddServerViewController : UIViewController
+
+@property (nonatomic, strong, nullable) NSManagedObject *existingServer;
 
 @end
 

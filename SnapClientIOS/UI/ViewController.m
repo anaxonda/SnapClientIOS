@@ -162,6 +162,26 @@
     [tableView reloadData];
 }
 
+- (nullable NSArray<UITableViewRowAction *> *)tableView:(UITableView *)tableView editActionsForRowAtIndexPath:(NSIndexPath *)indexPath {
+    UITableViewRowAction *editAction = [UITableViewRowAction rowActionWithStyle:UITableViewRowActionStyleNormal title:@"Edit" handler:^(UITableViewRowAction * _Nonnull action, NSIndexPath * _Nonnull indexPath) {
+        NSManagedObject *obj = [self.servers objectAtIndex:indexPath.row];
+        AddServerViewController *controller = [AddServerViewController new];
+        controller.existingServer = obj;
+        UINavigationController *nav = [[UINavigationController alloc] initWithRootViewController:controller];
+        [self presentViewController:nav animated:YES completion:NULL];
+    }];
+    editAction.backgroundColor = [UIColor blueColor];
+    
+    UITableViewRowAction *deleteAction = [UITableViewRowAction rowActionWithStyle:UITableViewRowActionStyleDestructive title:@"Delete" handler:^(UITableViewRowAction * _Nonnull action, NSIndexPath * _Nonnull indexPath) {
+        NSManagedObject *obj = [self.servers objectAtIndex:indexPath.row];
+        [self.pc.viewContext deleteObject:obj];
+        NSError *error = nil;
+        [self.pc.viewContext save:&error];
+    }];
+    
+    return @[deleteAction, editAction];
+}
+
 - (void)addServer {
     AddServerViewController *controller = [AddServerViewController new];
     UINavigationController *nav = [[UINavigationController alloc] initWithRootViewController:controller];
