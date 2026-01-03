@@ -210,19 +210,13 @@ typedef enum : uint16_t {
     }
     
     if (tag == MESSAGE_TYPE_SERVER_SETTINGS) {
-        uint32_t serverSettingsJSONLength;
-        [data getBytes:&serverSettingsJSONLength length:sizeof(uint32_t)];
-        
-        NSData *payload = [data subdataWithRange:NSMakeRange(sizeof(uint32_t), serverSettingsJSONLength)];
-        [self handleServerSettingsJSONPayload:payload];
+        // The payload IS the JSON. No extra length prefix.
+        [self handleServerSettingsJSONPayload:data];
     }
     
     if (tag == MESSAGE_TYPE_STREAM_TAGS) {
-        uint32_t streamTagsJSONLength;
-        [data getBytes:&streamTagsJSONLength length:sizeof(uint32_t)];
-        
-        NSData *payload = [data subdataWithRange:NSMakeRange(sizeof(uint32_t), streamTagsJSONLength)];
-        [self handleStreamTagsJSONPayload:payload];
+        // The payload IS the JSON.
+        [self handleStreamTagsJSONPayload:data];
     }
     
     if (tag == MESSAGE_TYPE_CODEC_HEADER) {
