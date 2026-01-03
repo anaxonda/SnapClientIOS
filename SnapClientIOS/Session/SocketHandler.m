@@ -7,6 +7,7 @@
 
 #import "SocketHandler.h"
 #import <GCDAsyncSocket.h>
+#import <UIKit/UIKit.h>
 
 typedef enum : uint16_t {
     MESSAGE_TYPE_BASE = 0,
