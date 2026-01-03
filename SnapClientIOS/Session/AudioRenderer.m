@@ -65,12 +65,18 @@
     }
 }
 
-- (void)feedPCMData:(NSData *)pcmData {
-    if (!TPCircularBufferProduceBytes(&pcmCircularBuffer, [pcmData bytes], (uint32_t)pcmData.length)) {
-        NSLog(@"Error inserting PCM frames into the PCM circular buffer!");
-    } else {
-        //NSLog(@"Inserted PCM frames");
+- (void)feedPCMData:(NSData *)pcmData serverSec:(int32_t)sec serverUsec:(int32_t)usec {
+    // Phase C: Use sec/usec to calculate playTime
+    
+    // acquire the lock for the circular buffer
+    dispatch_semaphore_wait(self.circularBufferSemaphore, DISPATCH_TIME_FOREVER);
+    
+    if (!TPCircularBufferProduceBytes(&circularBuffer, [pcmData bytes], (uint32_t)pcmData.length)) {
+        NSLog(@"Error writing to the AudioRenderer circular buffer!");
     }
+    
+    // release the lock for the circular buffer
+    dispatch_semaphore_signal(self.circularBufferSemaphore);
 }
 
 void audioQueueCallback(void *inUserData, AudioQueueRef inAQ, AudioQueueBufferRef inBuffer) {

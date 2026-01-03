@@ -15,17 +15,18 @@ NS_ASSUME_NONNULL_BEGIN
 
 @protocol FlacDecoderDelegate <NSObject>
 
-- (void)decoder:(FlacDecoder *)decoder didDecodePCMData:(NSData *)pcmData;
+- (void)decoder:(FlacDecoder *)decoder didDecodePCMData:(NSData *)pcmData serverSec:(int32_t)sec serverUsec:(int32_t)usec;
 
 @end
 
 @interface FlacDecoder : NSObject
 
-@property (nonatomic, weak) id<FlacDecoderDelegate> delegate;
-@property (copy, nonatomic) NSData *codecHeader;
+@property (weak, nonatomic) id<FlacDecoderDelegate> delegate;
+@property (strong, nonatomic) NSData *codecHeader;
 
-- (BOOL)feedAudioData:(NSData *)audioData;
+- (instancetype)init;
 - (StreamInfo *)getStreamInfo;
+- (BOOL)feedAudioData:(NSData *)audioData serverSec:(int32_t)sec serverUsec:(int32_t)usec;
 
 @end
 

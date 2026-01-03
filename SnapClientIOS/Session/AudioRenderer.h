@@ -14,7 +14,7 @@ NS_ASSUME_NONNULL_BEGIN
 @interface AudioRenderer : NSObject
 
 - (instancetype)initWithStreamInfo:(StreamInfo *)info;
-- (void)feedPCMData:(NSData *)pcmData;
+- (void)feedPCMData:(NSData *)pcmData serverSec:(int32_t)sec serverUsec:(int32_t)usec;
 
 @end
 
