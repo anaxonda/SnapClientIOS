@@ -79,7 +79,7 @@
     AVAudioTime *audioTime = [[AVAudioTime alloc] initWithHostTime:machTime];
     
     // 3. Schedule
-    [self.playerNode scheduleBuffer:buffer atTime:audioTime completionHandler:nil];
+    [self.playerNode scheduleBuffer:buffer atTime:audioTime options:0 completionHandler:nil];
     
     // Safety check: If machTime is in the past, AVAudioEngine usually plays immediately.
     // If it's too far in future, it waits.
