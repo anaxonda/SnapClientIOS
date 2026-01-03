@@ -78,33 +78,35 @@
 }
 
 - (void)socketHandler:(SocketHandler *)socketHandler didReceiveStreamTags:(NSDictionary *)tags {
-    NSMutableDictionary *nowPlayingInfo = [[NSMutableDictionary alloc] initWithDictionary:[MPNowPlayingInfoCenter defaultCenter].nowPlayingInfo];
-    
-    if (tags[@"TITLE"]) {
-        [nowPlayingInfo setObject:tags[@"TITLE"] forKey:MPMediaItemPropertyTitle];
-    }
-    if (tags[@"ARTIST"]) {
-        [nowPlayingInfo setObject:tags[@"ARTIST"] forKey:MPMediaItemPropertyArtist];
-    }
-    if (tags[@"ALBUM"]) {
-        [nowPlayingInfo setObject:tags[@"ALBUM"] forKey:MPMediaItemPropertyAlbumTitle];
-    }
-    
-    // Cover Art (Base64)
-    if (tags[@"COVERART"]) {
-        NSData *imageData = [[NSData alloc] initWithBase64EncodedString:tags[@"COVERART"] options:NSDataBase64DecodingIgnoreUnknownCharacters];
-        if (imageData) {
-            UIImage *image = [UIImage imageWithData:imageData];
-            if (image) {
-                MPMediaItemArtwork *artwork = [[MPMediaItemArtwork alloc] initWithBoundsSize:image.size requestHandler:^UIImage * _Nonnull(CGSize size) {
-                    return image;
-                }];
-                [nowPlayingInfo setObject:artwork forKey:MPMediaItemPropertyArtwork];
+    dispatch_async(dispatch_get_main_queue(), ^{
+        NSMutableDictionary *nowPlayingInfo = [[NSMutableDictionary alloc] initWithDictionary:[MPNowPlayingInfoCenter defaultCenter].nowPlayingInfo];
+        
+        if (tags[@"TITLE"]) {
+            [nowPlayingInfo setObject:tags[@"TITLE"] forKey:MPMediaItemPropertyTitle];
+        }
+        if (tags[@"ARTIST"]) {
+            [nowPlayingInfo setObject:tags[@"ARTIST"] forKey:MPMediaItemPropertyArtist];
+        }
+        if (tags[@"ALBUM"]) {
+            [nowPlayingInfo setObject:tags[@"ALBUM"] forKey:MPMediaItemPropertyAlbumTitle];
+        }
+        
+        // Cover Art (Base64)
+        if (tags[@"COVERART"]) {
+            NSData *imageData = [[NSData alloc] initWithBase64EncodedString:tags[@"COVERART"] options:NSDataBase64DecodingIgnoreUnknownCharacters];
+            if (imageData) {
+                UIImage *image = [UIImage imageWithData:imageData];
+                if (image) {
+                    MPMediaItemArtwork *artwork = [[MPMediaItemArtwork alloc] initWithBoundsSize:image.size requestHandler:^UIImage * _Nonnull(CGSize size) {
+                        return image;
+                    }];
+                    [nowPlayingInfo setObject:artwork forKey:MPMediaItemPropertyArtwork];
+                }
             }
         }
-    }
-    
-    [MPNowPlayingInfoCenter defaultCenter].nowPlayingInfo = nowPlayingInfo;
+        
+        [MPNowPlayingInfoCenter defaultCenter].nowPlayingInfo = nowPlayingInfo;
+    });
 }
 
 - (void)sendSync {
