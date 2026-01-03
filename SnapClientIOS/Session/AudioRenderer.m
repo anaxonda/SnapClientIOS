@@ -35,14 +35,13 @@
     
     [self.engine attachNode:self.playerNode];
     
-    // Create Audio Format (16-bit Int is standard for Snapcast FLAC)
-    // AVAudioFormat usually prefers Float32. We might need to convert or tell it to handle Int16.
-    // Snapserver sends Interleaved Int16 usually.
-    // AVAudioCommonFormat: AVAudioPCMFormatInt16
-    self.audioFormat = [[AVAudioFormat alloc] initWithCommonFormat:AVAudioPCMFormatInt16
+    // Create Audio Format
+    // We use Float32 because AVAudioEngine's mixer node expects it.
+    // We will convert Int16 -> Float32 manually.
+    self.audioFormat = [[AVAudioFormat alloc] initWithCommonFormat:AVAudioPCMFormatFloat32
                                                         sampleRate:self.streamInfo.sampleRate
                                                           channels:self.streamInfo.channels
-                                                       interleaved:YES];
+                                                       interleaved:NO]; // Float32 is usually non-interleaved in AVAudioEngine
     
     [self.engine connect:self.playerNode to:self.engine.mainMixerNode format:self.audioFormat];
     
@@ -56,33 +55,32 @@
 
 - (void)feedPCMData:(NSData *)pcmData serverSec:(int32_t)sec serverUsec:(int32_t)usec {
     // 1. Create Buffer
-    // We need to copy bytes into AVAudioPCMBuffer
-    // AVAudioPCMBuffer for Int16 Interleaved provides int16ChannelData (if deinterleaved) or...
-    // Wait, AVAudioPCMBuffer doesn't easily support Interleaved access via int16ChannelData if it's Int16?
-    // Actually, initWithCommonFormat:AVAudioPCMFormatInt16 interleaved:YES
-    // buffer.int16ChannelData[0] points to the interleaved buffer.
-    
-    AVAudioFrameCount frameCount = (AVAudioFrameCount)(pcmData.length / self.audioFormat.streamDescription->mBytesPerFrame);
+    AVAudioFrameCount frameCount = (AVAudioFrameCount)(pcmData.length / (self.streamInfo.channels * sizeof(int16_t)));
     AVAudioPCMBuffer *buffer = [[AVAudioPCMBuffer alloc] initWithPCMFormat:self.audioFormat frameCapacity:frameCount];
     buffer.frameLength = frameCount;
     
-    // Copy data
-    memcpy(buffer.int16ChannelData[0], pcmData.bytes, pcmData.length);
+    // 2. Convert Int16 (Interleaved) -> Float32 (Non-Interleaved)
+    int16_t *src = (int16_t *)pcmData.bytes;
+    float *const *dst = buffer.floatChannelData;
     
-    // 2. Calculate Timestamp
+    for (int frame = 0; frame < frameCount; frame++) {
+        for (int ch = 0; ch < self.streamInfo.channels; ch++) {
+            // Convert and de-interleave
+            dst[ch][frame] = src[frame * self.streamInfo.channels + ch] / 32768.0f;
+        }
+    }
+    
+    // 3. Calculate Timestamp
     double serverTimeMs = (sec * 1000.0) + (usec / 1000.0);
-    double latencyMs = 1000.0; // Hardcoded 1s latency for now (matches Snapcast default)
+    double latencyMs = 1000.0; // Hardcoded 1s latency
     double targetPlayTimeMs = serverTimeMs + latencyMs;
     
     uint64_t machTime = [self.timeProvider machTimeForServerTimeMs:targetPlayTimeMs];
     
     AVAudioTime *audioTime = [[AVAudioTime alloc] initWithHostTime:machTime];
     
-    // 3. Schedule
+    // 4. Schedule
     [self.playerNode scheduleBuffer:buffer atTime:audioTime options:0 completionHandler:nil];
-    
-    // Safety check: If machTime is in the past, AVAudioEngine usually plays immediately.
-    // If it's too far in future, it waits.
 }
 
 @end
