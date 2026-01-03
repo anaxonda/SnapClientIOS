@@ -44,6 +44,9 @@
 - (void)loadView {
     self.navigationItem.title = @"Snapcast Servers";
     
+    // Add standard Edit button
+    self.navigationItem.leftBarButtonItem = self.editButtonItem;
+    
     UIBarButtonItem *addBtn = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemAdd target:self action:@selector(addServer)];
     UIBarButtonItem *streamBtn = [[UIBarButtonItem alloc] initWithTitle:@"Streams" style:UIBarButtonItemStylePlain target:self action:@selector(showStreams)];
     
@@ -55,6 +58,21 @@
     
     self.tableView = tableView;
     self.view = tableView;
+}
+
+- (void)setEditing:(BOOL)editing animated:(BOOL)animated {
+    [super setEditing:editing animated:animated];
+    [self.tableView setEditing:editing animated:animated];
+}
+
+// Standard Deletion Handler (for Edit Mode)
+- (void)tableView:(UITableView *)tableView commitEditingStyle:(UITableViewCellEditingStyle)editingStyle forRowAtIndexPath:(NSIndexPath *)indexPath {
+    if (editingStyle == UITableViewCellEditingStyleDelete) {
+        NSManagedObject *obj = [self.servers objectAtIndex:indexPath.row];
+        [self.pc.viewContext deleteObject:obj];
+        NSError *error = nil;
+        [self.pc.viewContext save:&error];
+    }
 }
 
 - (void)showStreams {
@@ -138,6 +156,7 @@
     if (self.session && [[obj valueForKey:@"host"] isEqualToString:self.session.host] && [[obj valueForKey:@"port"] integerValue] == self.session.port) {
         cell.accessoryType = UITableViewCellAccessoryCheckmark;
     } else {
+        // In edit mode, we might want DisclosureIndicator, but keeping simple for now
         cell.accessoryType = UITableViewCellAccessoryNone;
     }
     
@@ -148,18 +167,27 @@
     [tableView deselectRowAtIndexPath:indexPath animated:YES];
     
     NSManagedObject *obj = [self.servers objectAtIndex:indexPath.row];
-    NSString *host = [obj valueForKey:@"host"];
-    NSInteger port = [[obj valueForKey:@"port"] integerValue];
     
-    NSLog(@"Connecting to %@:%ld", host, (long)port);
-    
-    // Stop previous session if possible (assuming simple replacement is okay for now)
-    self.session = nil;
-    
-    self.session = [[ClientSession alloc] initWithSnapServerHost:host port:port];
-    [self.session start];
-    
-    [tableView reloadData];
+    if (self.tableView.editing) {
+        // Edit Mode: Open Editor
+        AddServerViewController *controller = [AddServerViewController new];
+        controller.existingServer = obj;
+        UINavigationController *nav = [[UINavigationController alloc] initWithRootViewController:controller];
+        [self presentViewController:nav animated:YES completion:NULL];
+    } else {
+        // Normal Mode: Connect
+        NSString *host = [obj valueForKey:@"host"];
+        NSInteger port = [[obj valueForKey:@"port"] integerValue];
+        
+        NSLog(@"Connecting to %@:%ld", host, (long)port);
+        
+        self.session = nil;
+        
+        self.session = [[ClientSession alloc] initWithSnapServerHost:host port:port];
+        [self.session start];
+        
+        [tableView reloadData];
+    }
 }
 
 - (nullable NSArray<UITableViewRowAction *> *)tableView:(UITableView *)tableView editActionsForRowAtIndexPath:(NSIndexPath *)indexPath {
