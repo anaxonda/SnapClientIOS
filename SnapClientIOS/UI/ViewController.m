@@ -17,6 +17,7 @@
 
 @property (weak, nonatomic) UITableView *tableView;
 @property (strong, nonatomic) ClientSession *session;
+@property (strong, nonatomic) NSDictionary *serverStatus;
 
 @end
 
@@ -31,11 +32,22 @@
     
     // get a list of saved servers
     self.servers = [self.pc servers];
+    
+    [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(onServerStatus:) name:@"SnapClientServerStatusUpdated" object:nil];
+}
+
+- (void)onServerStatus:(NSNotification *)note {
+    self.serverStatus = note.userInfo;
+    NSLog(@"UI received status update");
 }
 
 - (void)loadView {
     self.navigationItem.title = @"Snapcast Servers";
-    self.navigationItem.rightBarButtonItem = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemAdd target:self action:@selector(addServer)];
+    
+    UIBarButtonItem *addBtn = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemAdd target:self action:@selector(addServer)];
+    UIBarButtonItem *streamBtn = [[UIBarButtonItem alloc] initWithTitle:@"Streams" style:UIBarButtonItemStylePlain target:self action:@selector(showStreams)];
+    
+    self.navigationItem.rightBarButtonItems = @[addBtn, streamBtn];
     
     UITableView *tableView = [[UITableView alloc] initWithFrame:CGRectZero style:UITableViewStylePlain];
     tableView.dataSource = self;
@@ -43,6 +55,54 @@
     
     self.tableView = tableView;
     self.view = tableView;
+}
+
+- (void)showStreams {
+    if (!self.serverStatus) {
+        // alert
+        return;
+    }
+    
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"Select Stream" message:nil preferredStyle:UIAlertControllerStyleActionSheet];
+    
+    NSArray *streams = self.serverStatus[@"server"][@"streams"];
+    NSString *myClientId = @"00:11:22:33:44:55"; // Hardcoded in SocketHandler
+    NSString *myGroupId = nil;
+    
+    // Find my group
+    NSArray *groups = self.serverStatus[@"server"][@"groups"];
+    for (NSDictionary *group in groups) {
+        for (NSDictionary *client in group[@"clients"]) {
+            if ([client[@"id"] isEqualToString:myClientId] || [client[@"host"][@"mac"] isEqualToString:myClientId]) {
+                myGroupId = group[@"id"];
+                break;
+            }
+        }
+        if (myGroupId) break;
+    }
+    
+    if (!myGroupId && groups.count > 0) {
+        // Fallback: Use first group
+        myGroupId = groups[0][@"id"];
+    }
+    
+    for (NSDictionary *stream in streams) {
+        NSString *name = stream[@"id"]; // or stream[@"uri"]? Usually id is human readable alias if set
+        if (stream[@"meta"] && stream[@"meta"][@"STREAM"]) {
+             // Try to find a better name
+        }
+        
+        [alert addAction:[UIAlertAction actionWithTitle:name style:UIAlertActionStyleDefault handler:^(UIAlertAction * _Nonnull action) {
+            [self.session setStreamId:stream[@"id"] forGroupId:myGroupId];
+        }]];
+    }
+    
+    [alert addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
+    
+    // For iPad
+    alert.popoverPresentationController.barButtonItem = self.navigationItem.rightBarButtonItems[1];
+    
+    [self presentViewController:alert animated:YES completion:nil];
 }
 
 - (void)viewDidLoad {
