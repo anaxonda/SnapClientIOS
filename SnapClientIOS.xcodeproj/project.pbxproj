@@ -25,9 +25,9 @@
 		47E903D5259D83DE00A764A9 /* FlacDecoder.m in Sources */ = {isa = PBXBuildFile; fileRef = 47E903D4259D83DE00A764A9 /* FlacDecoder.m */; };
 		47E903DE259DAA3E00A764A9 /* StreamInfo.m in Sources */ = {isa = PBXBuildFile; fileRef = 47E903DD259DAA3E00A764A9 /* StreamInfo.m */; };
 		                47E903E825A1A20E00A764A9 /* AudioRenderer.m in Sources */ = {isa = PBXBuildFile; fileRef = 47E903E1259DBB8D00A764A9 /* AudioRenderer.m */; };
-		                47E903F225A1A20E00A764A9 /* TimeProvider.m in Sources */ = {isa = PBXBuildFile; fileRef = 47E903F125A1A20E00A764A9 /* TimeProvider.m */; };
-		/* End PBXBuildFile section */
-/* Begin PBXFileReference section */
+		                                47E903F225A1A20E00A764A9 /* TimeProvider.m in Sources */ = {isa = PBXBuildFile; fileRef = 47E903F125A1A20E00A764A9 /* TimeProvider.m */; };
+		                                47E903F525A1A20E00A764A9 /* RpcHandler.m in Sources */ = {isa = PBXBuildFile; fileRef = 47E903F425A1A20E00A764A9 /* RpcHandler.m */; };
+		                /* End PBXBuildFile section *//* Begin PBXFileReference section */
 		21B2012FF0BC4126667752F0 /* Pods-SnapClientIOS.release.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-SnapClientIOS.release.xcconfig"; path = "Target Support Files/Pods-SnapClientIOS/Pods-SnapClientIOS.release.xcconfig"; sourceTree = "<group>"; };
 		4728FBD425F4CCA1008FB67C /* PersistentContainer.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = PersistentContainer.h; sourceTree = "<group>"; };
 		4728FBD525F4CCA1008FB67C /* PersistentContainer.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = PersistentContainer.m; sourceTree = "<group>"; };
@@ -59,8 +59,10 @@
 		47E903E0259DBB8D00A764A9 /* AudioRenderer.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = AudioRenderer.h; sourceTree = "<group>"; };
 		                47E903E1259DBB8D00A764A9 /* AudioRenderer.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = AudioRenderer.m; sourceTree = "<group>"; };
 		                47E903F025A1A20E00A764A9 /* TimeProvider.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = TimeProvider.h; sourceTree = "<group>"; };
-		                47E903F125A1A20E00A764A9 /* TimeProvider.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TimeProvider.m; sourceTree = "<group>"; };
-		                90D82822696E5165D0DA0401 /* Pods_SnapClientIOS.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = Pods_SnapClientIOS.framework; sourceTree = BUILT_PRODUCTS_DIR; };		E14E06205BEB61135913268F /* Pods-SnapClientIOS.debug.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-SnapClientIOS.debug.xcconfig"; path = "Target Support Files/Pods-SnapClientIOS/Pods-SnapClientIOS.debug.xcconfig"; sourceTree = "<group>"; };
+		                                47E903F125A1A20E00A764A9 /* TimeProvider.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TimeProvider.m; sourceTree = "<group>"; };
+		                                47E903F325A1A20E00A764A9 /* RpcHandler.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = RpcHandler.h; sourceTree = "<group>"; };
+		                                47E903F425A1A20E00A764A9 /* RpcHandler.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = RpcHandler.m; sourceTree = "<group>"; };
+		                                90D82822696E5165D0DA0401 /* Pods_SnapClientIOS.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = Pods_SnapClientIOS.framework; sourceTree = BUILT_PRODUCTS_DIR; };		E14E06205BEB61135913268F /* Pods-SnapClientIOS.debug.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-SnapClientIOS.debug.xcconfig"; path = "Target Support Files/Pods-SnapClientIOS/Pods-SnapClientIOS.debug.xcconfig"; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -110,9 +112,11 @@
 				                                47E903E0259DBB8D00A764A9 /* AudioRenderer.h */,
 				                                47E903E1259DBB8D00A764A9 /* AudioRenderer.m */,
 				                                47E903F025A1A20E00A764A9 /* TimeProvider.h */,
-				                                47E903F125A1A20E00A764A9 /* TimeProvider.m */,
-				                        );
-				                        path = Session;			sourceTree = "<group>";
+				                                                                47E903F125A1A20E00A764A9 /* TimeProvider.m */,
+				                                                                47E903F325A1A20E00A764A9 /* RpcHandler.h */,
+				                                                                47E903F425A1A20E00A764A9 /* RpcHandler.m */,
+				                                                        );
+				                                                        path = Session;			sourceTree = "<group>";
 		};
 		47A26D9C25F4C7750028C153 /* Models */ = {
 			isa = PBXGroup;
@@ -297,9 +301,10 @@
 				47A26D9F25F4C8430028C153 /* SnapClientIOS.xcdatamodeld in Sources */,
 				                                47E903DE259DAA3E00A764A9 /* StreamInfo.m in Sources */,
 				                                4728FBDF25F4D3E3008FB67C /* AddServerViewController.m in Sources */,
-				                                47E903F225A1A20E00A764A9 /* TimeProvider.m in Sources */,
-				                        );
-				                        runOnlyForDeploymentPostprocessing = 0;		};
+				                                                                47E903F225A1A20E00A764A9 /* TimeProvider.m in Sources */,
+				                                                                47E903F525A1A20E00A764A9 /* RpcHandler.m in Sources */,
+				                                                        );
+				                                                        runOnlyForDeploymentPostprocessing = 0;		};
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXVariantGroup section */
