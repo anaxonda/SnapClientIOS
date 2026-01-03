@@ -74,7 +74,32 @@
     
     cell.textLabel.text = [obj valueForKey:@"name"];
     cell.detailTextLabel.text = [NSString stringWithFormat:@"%@:%ld", [obj valueForKey:@"host"], (long)[[obj valueForKey:@"port"] integerValue]];
+    
+    if (self.session && [[obj valueForKey:@"host"] isEqualToString:self.session.host] && [[obj valueForKey:@"port"] integerValue] == self.session.port) {
+        cell.accessoryType = UITableViewCellAccessoryCheckmark;
+    } else {
+        cell.accessoryType = UITableViewCellAccessoryNone;
+    }
+    
     return cell;
+}
+
+- (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
+    [tableView deselectRowAtIndexPath:indexPath animated:YES];
+    
+    NSManagedObject *obj = [self.servers objectAtIndex:indexPath.row];
+    NSString *host = [obj valueForKey:@"host"];
+    NSInteger port = [[obj valueForKey:@"port"] integerValue];
+    
+    NSLog(@"Connecting to %@:%ld", host, (long)port);
+    
+    // Stop previous session if possible (assuming simple replacement is okay for now)
+    self.session = nil;
+    
+    self.session = [[ClientSession alloc] initWithSnapServerHost:host port:port];
+    [self.session start];
+    
+    [tableView reloadData];
 }
 
 - (void)addServer {
