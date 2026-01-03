@@ -60,7 +60,6 @@
     
     [self.engine connect:self.playerNode to:self.engine.mainMixerNode format:self.audioFormat];
     
-    NSError *error = nil;
     if (![self.engine startAndReturnError:&error]) {
         NSLog(@"Error starting AVAudioEngine: %@", error);
     }
