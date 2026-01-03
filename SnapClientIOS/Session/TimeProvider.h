@@ -17,6 +17,10 @@ NS_ASSUME_NONNULL_BEGIN
 /// Returns the calculated server time in milliseconds
 - (double)serverNow;
 
+/// Converts a server timestamp (milliseconds) to local mach_absolute_time units
+/// used by AVAudioTime.
+- (uint64_t)machTimeForServerTimeMs:(double)serverTimeMs;
+
 /// Updates the time offset based on the round-trip timestamps
 /// @param c2s Client-to-Server delta (ServerReceived - ClientSent)
 /// @param s2c Server-to-Client delta (ClientReceived - ServerSent)

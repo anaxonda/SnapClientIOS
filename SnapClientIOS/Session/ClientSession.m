@@ -52,7 +52,7 @@
         self.flacDecoder = [[FlacDecoder alloc] init];
         self.flacDecoder.delegate = self;
         self.flacDecoder.codecHeader = codecHeader;
-        self.audioRenderer = [[AudioRenderer alloc] initWithStreamInfo:[self.flacDecoder getStreamInfo]];
+        self.audioRenderer = [[AudioRenderer alloc] initWithStreamInfo:[self.flacDecoder getStreamInfo] timeProvider:self.timeProvider];
     }
 }
 
