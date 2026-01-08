@@ -11,10 +11,16 @@
 #import "AudioRenderer.h"
 #import "TimeProvider.h"
 #import "RpcHandler.h"
+#include <mach/mach.h>
+#include <mach/mach_time.h>
 @import MediaPlayer;
 
 @interface ClientSession () <SocketHandlerDelegate, FlacDecoderDelegate, RpcHandlerDelegate>
 
+@property (strong, nonatomic) SocketHandler *socketHandler;
+@property (strong, nonatomic) RpcHandler *rpcHandler;
+@property (strong, nonatomic) FlacDecoder *flacDecoder;
+@property (strong, nonatomic) AudioRenderer *audioRenderer;
 @property (strong, nonatomic) TimeProvider *timeProvider;
 @property (strong, nonatomic) NSTimer *syncTimer;
 @property (assign, nonatomic) uint64_t lastPingTime;
@@ -39,40 +45,90 @@
     return self;
 }
 
-// ... (omitted)
+- (void)setupRemoteCommandCenter {
+    MPRemoteCommandCenter *commandCenter = [MPRemoteCommandCenter sharedCommandCenter];
+    [commandCenter.playCommand setEnabled:YES];
+    [commandCenter.playCommand addTargetWithHandler:^MPRemoteCommandHandlerStatus(MPRemoteCommandEvent * _Nonnull event) {
+        return MPRemoteCommandHandlerStatusSuccess;
+    }];
+    [commandCenter.pauseCommand setEnabled:YES];
+    [commandCenter.pauseCommand addTargetWithHandler:^MPRemoteCommandHandlerStatus(MPRemoteCommandEvent * _Nonnull event) {
+        return MPRemoteCommandHandlerStatusSuccess;
+    }];
+}
+
+- (void)start {
+    // Start Sync Timer (every 1 second)
+    self.syncTimer = [NSTimer scheduledTimerWithTimeInterval:1.0 target:self selector:@selector(sendSync) userInfo:nil repeats:YES];
+    
+    // Connect RPC
+    [self.rpcHandler connect];
+    
+    // Initial Now Playing Info
+    NSMutableDictionary *nowPlayingInfo = [[NSMutableDictionary alloc] init];
+    [nowPlayingInfo setObject:@"Snapcast" forKey:MPMediaItemPropertyTitle];
+    [MPNowPlayingInfoCenter defaultCenter].nowPlayingInfo = nowPlayingInfo;
+}
 
 - (void)sendSync {
     self.lastPingTime = mach_absolute_time();
     [self.socketHandler sendTime];
 }
 
-// ...
+- (void)setStreamId:(NSString *)streamId forGroupId:(NSString *)groupId {
+    [self.rpcHandler setStreamId:streamId forGroupId:groupId];
+}
+
+- (void)dealloc {
+    [self.syncTimer invalidate];
+}
+
+#pragma mark - SocketHandlerDelegate
+- (void)socketHandler:(SocketHandler *)socketHandler didReceiveCodec:(NSString *)codec header:(NSData *)codecHeader {
+    if ([codec isEqualToString:@"flac"]) {
+        self.flacDecoder = [[FlacDecoder alloc] init];
+        self.flacDecoder.delegate = self;
+        self.flacDecoder.codecHeader = codecHeader;
+        self.audioRenderer = [[AudioRenderer alloc] initWithStreamInfo:[self.flacDecoder getStreamInfo] timeProvider:self.timeProvider];
+    }
+}
+
+- (void)socketHandler:(SocketHandler *)socketHandler didReceiveAudioData:(NSData *)audioData serverSec:(int32_t)sec serverUsec:(int32_t)usec {
+    if (![self.flacDecoder feedAudioData:audioData serverSec:sec serverUsec:usec]) {
+        NSLog(@"Error feeding audio data to the decoder");
+    }
+}
 
 - (void)socketHandler:(SocketHandler *)socketHandler didReceiveTimeAtClient:(uint64_t)clientRecvMachTime serverReceivedSec:(int32_t)serverRecvSec serverReceivedUsec:(int32_t)serverRecvUsec serverSentSec:(int32_t)serverSentSec serverSentUsec:(int32_t)serverSentUsec {
     
     // Calculate RTT
     uint64_t rttMach = clientRecvMachTime - self.lastPingTime;
-    double rttMs = [self.timeProvider machToMs:rttMach];
     
     // Server Time = ServerSent
     double serverSentMs = (serverSentSec * 1000.0) + (serverSentUsec / 1000.0);
     
     // Local Time (when ServerSent happened) = ClientRecv - RTT/2
-    // We use Mach Time for local reference
     uint64_t localMachAtServerSent = clientRecvMachTime - (rttMach / 2);
     double localMs = [self.timeProvider machToMs:localMachAtServerSent];
     
     [self.timeProvider updateOffsetWithServerTime:serverSentMs localTime:localMs];
 }
-"Snapcast" forKey:MPMediaItemPropertyTitle];
-    [MPNowPlayingInfoCenter defaultCenter].nowPlayingInfo = nowPlayingInfo;
-}
 
-#pragma mark - RpcHandlerDelegate
-- (void)rpcHandler:(RpcHandler *)handler didReceiveServerStatus:(NSDictionary *)status {
-    NSLog(@"RPC Status Received: %@", status);
-    // TODO: Notify UI about streams
-    [[NSNotificationCenter defaultCenter] postNotificationName:@"SnapClientServerStatusUpdated" object:nil userInfo:status];
+- (void)socketHandler:(SocketHandler *)socketHandler didReceiveServerSettings:(NSDictionary *)settings {
+    if (settings[@"latency"]) {
+        NSInteger latency = [settings[@"latency"] integerValue];
+        [self.audioRenderer setLatency:latency];
+    }
+    
+    if (settings[@"volume"]) {
+        NSInteger vol = [settings[@"volume"] integerValue];
+        [self.audioRenderer setVolume:(float)vol / 100.0];
+    }
+    
+    if (settings[@"muted"]) {
+        BOOL muted = [settings[@"muted"] boolValue];
+        [self.audioRenderer setMuted:muted];
+    }
 }
 
 - (void)socketHandler:(SocketHandler *)socketHandler didReceiveStreamTags:(NSDictionary *)tags {
@@ -107,59 +163,11 @@
     });
 }
 
-- (void)sendSync {
-    [self.socketHandler sendTime];
-}
-
-- (void)setStreamId:(NSString *)streamId forGroupId:(NSString *)groupId {
-    [self.rpcHandler setStreamId:streamId forGroupId:groupId];
-}
-
-- (void)dealloc {
-    [self.syncTimer invalidate];
-}
-
-#pragma mark - SocketHandlerDelegate
-- (void)socketHandler:(SocketHandler *)socketHandler didReceiveCodec:(NSString *)codec header:(NSData *)codecHeader {
-    if ([codec isEqualToString:@"flac"]) {
-        self.flacDecoder = [[FlacDecoder alloc] init];
-        self.flacDecoder.delegate = self;
-        self.flacDecoder.codecHeader = codecHeader;
-        self.audioRenderer = [[AudioRenderer alloc] initWithStreamInfo:[self.flacDecoder getStreamInfo] timeProvider:self.timeProvider];
-    }
-}
-
-- (void)socketHandler:(SocketHandler *)socketHandler didReceiveAudioData:(NSData *)audioData serverSec:(int32_t)sec serverUsec:(int32_t)usec {
-    if (![self.flacDecoder feedAudioData:audioData serverSec:sec serverUsec:usec]) {
-        NSLog(@"Error feeding audio data to the decoder");
-    }
-}
-
-- (void)socketHandler:(SocketHandler *)socketHandler didReceiveTimeAtClient:(NSDate *)clientReceivedTime serverReceivedSec:(int32_t)serverRecvSec serverReceivedUsec:(int32_t)serverRecvUsec serverSentSec:(int32_t)serverSentSec serverSentUsec:(int32_t)serverSentUsec {
-    
-    double clientReceivedMs = [clientReceivedTime timeIntervalSince1970] * 1000.0;
-    double serverReceivedMs = (serverRecvSec * 1000.0) + (serverRecvUsec / 1000.0);
-    double serverSentMs = (serverSentSec * 1000.0) + (serverSentUsec / 1000.0);
-    
-    // Approximation until we fix ClientSent echo
-    [self.timeProvider setDiffWithC2S:(serverReceivedMs - (clientReceivedMs - 5)) s2c:(clientReceivedMs - serverSentMs)];
-}
-
-- (void)socketHandler:(SocketHandler *)socketHandler didReceiveServerSettings:(NSDictionary *)settings {
-    if (settings[@"latency"]) {
-        NSInteger latency = [settings[@"latency"] integerValue];
-        [self.audioRenderer setLatency:latency];
-    }
-    
-    if (settings[@"volume"]) {
-        NSInteger vol = [settings[@"volume"] integerValue];
-        [self.audioRenderer setVolume:(float)vol / 100.0];
-    }
-    
-    if (settings[@"muted"]) {
-        BOOL muted = [settings[@"muted"] boolValue];
-        [self.audioRenderer setMuted:muted];
-    }
+#pragma mark - RpcHandlerDelegate
+- (void)rpcHandler:(RpcHandler *)handler didReceiveServerStatus:(NSDictionary *)status {
+    NSLog(@"RPC Status Received: %@", status);
+    // Notify UI about streams
+    [[NSNotificationCenter defaultCenter] postNotificationName:@"SnapClientServerStatusUpdated" object:nil userInfo:status];
 }
 
 #pragma mark - FlacDecoderDelegate
