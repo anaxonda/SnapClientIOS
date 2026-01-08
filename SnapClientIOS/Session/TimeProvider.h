@@ -11,22 +11,20 @@ NS_ASSUME_NONNULL_BEGIN
 
 @interface TimeProvider : NSObject
 
-/// Returns the current local time in milliseconds (Unix epoch based)
-- (double)now;
+// Returns the current local mach_absolute_time converted to milliseconds
+- (double)nowMs;
 
-/// Returns the calculated server time in milliseconds
-- (double)serverNow;
+// Returns the calculated server time in milliseconds based on mach time
+- (double)serverNowMs;
+
+/// Updates the time offset.
+/// @param serverTimeMs The server time in milliseconds.
+/// @param localTimeMs The local mach time in milliseconds when the server time was valid.
+- (void)updateOffsetWithServerTime:(double)serverTimeMs localTime:(double)localTimeMs;
 
 /// Converts a server timestamp (milliseconds) to local mach_absolute_time units
-/// used by AVAudioTime.
 - (uint64_t)machTimeForServerTimeMs:(double)serverTimeMs;
 
-/// Updates the time offset based on the round-trip timestamps
-/// @param c2s Client-to-Server delta (ServerReceived - ClientSent)
-/// @param s2c Server-to-Client delta (ClientReceived - ServerSent)
-- (void)setDiffWithC2S:(double)c2s s2c:(double)s2c;
-
-/// Resets the synchronization state
 - (void)reset;
 
 @end

@@ -8,6 +8,8 @@
 #import "SocketHandler.h"
 #import <GCDAsyncSocket.h>
 #import <UIKit/UIKit.h>
+#include <mach/mach.h>
+#include <mach/mach_time.h>
 
 typedef enum : uint16_t {
     MESSAGE_TYPE_BASE = 0,
@@ -282,7 +284,7 @@ typedef enum : uint16_t {
 - (void)handleTimePayload:(NSData *)data {
     // Notify delegate with stored timestamps
     [self.delegate socketHandler:self 
-          didReceiveTimeAtClient:[NSDate date]
+          didReceiveTimeAtClient:mach_absolute_time()
                serverReceivedSec:_serverRecvSec
               serverReceivedUsec:_serverRecvUsec
                    serverSentSec:_serverSentSec

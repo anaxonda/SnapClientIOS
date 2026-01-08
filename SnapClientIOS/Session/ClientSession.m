@@ -15,12 +15,9 @@
 
 @interface ClientSession () <SocketHandlerDelegate, FlacDecoderDelegate, RpcHandlerDelegate>
 
-@property (strong, nonatomic) SocketHandler *socketHandler;
-@property (strong, nonatomic) RpcHandler *rpcHandler;
-@property (strong, nonatomic) FlacDecoder *flacDecoder;
-@property (strong, nonatomic) AudioRenderer *audioRenderer;
 @property (strong, nonatomic) TimeProvider *timeProvider;
 @property (strong, nonatomic) NSTimer *syncTimer;
+@property (assign, nonatomic) uint64_t lastPingTime;
 
 @end
 
@@ -33,8 +30,7 @@
         self.timeProvider = [[TimeProvider alloc] init];
         self.socketHandler = [[SocketHandler alloc] initWithSnapServerHost:host port:port delegate:self];
         
-        // Initialize RPC Handler (Port 1705 hardcoded for now, or assume port+1?)
-        // Snap.Net implies 1705 is standard.
+        // Initialize RPC Handler
         self.rpcHandler = [[RpcHandler alloc] initWithHost:host port:1705];
         self.rpcHandler.delegate = self;
         
@@ -43,30 +39,32 @@
     return self;
 }
 
-- (void)setupRemoteCommandCenter {
-    MPRemoteCommandCenter *commandCenter = [MPRemoteCommandCenter sharedCommandCenter];
-    [commandCenter.playCommand setEnabled:YES];
-    [commandCenter.playCommand addTargetWithHandler:^MPRemoteCommandHandlerStatus(MPRemoteCommandEvent * _Nonnull event) {
-        // [self start]; // Already auto-started?
-        return MPRemoteCommandHandlerStatusSuccess;
-    }];
-    [commandCenter.pauseCommand setEnabled:YES];
-    [commandCenter.pauseCommand addTargetWithHandler:^MPRemoteCommandHandlerStatus(MPRemoteCommandEvent * _Nonnull event) {
-        // [self stop]; // Not implemented yet
-        return MPRemoteCommandHandlerStatusSuccess;
-    }];
+// ... (omitted)
+
+- (void)sendSync {
+    self.lastPingTime = mach_absolute_time();
+    [self.socketHandler sendTime];
 }
 
-- (void)start {
-    // Start Sync Timer (every 1 second)
-    self.syncTimer = [NSTimer scheduledTimerWithTimeInterval:1.0 target:self selector:@selector(sendSync) userInfo:nil repeats:YES];
+// ...
+
+- (void)socketHandler:(SocketHandler *)socketHandler didReceiveTimeAtClient:(uint64_t)clientRecvMachTime serverReceivedSec:(int32_t)serverRecvSec serverReceivedUsec:(int32_t)serverRecvUsec serverSentSec:(int32_t)serverSentSec serverSentUsec:(int32_t)serverSentUsec {
     
-    // Connect RPC
-    [self.rpcHandler connect];
+    // Calculate RTT
+    uint64_t rttMach = clientRecvMachTime - self.lastPingTime;
+    double rttMs = [self.timeProvider machToMs:rttMach];
     
-    // Initial Now Playing Info
-    NSMutableDictionary *nowPlayingInfo = [[NSMutableDictionary alloc] init];
-    [nowPlayingInfo setObject:@"Snapcast" forKey:MPMediaItemPropertyTitle];
+    // Server Time = ServerSent
+    double serverSentMs = (serverSentSec * 1000.0) + (serverSentUsec / 1000.0);
+    
+    // Local Time (when ServerSent happened) = ClientRecv - RTT/2
+    // We use Mach Time for local reference
+    uint64_t localMachAtServerSent = clientRecvMachTime - (rttMach / 2);
+    double localMs = [self.timeProvider machToMs:localMachAtServerSent];
+    
+    [self.timeProvider updateOffsetWithServerTime:serverSentMs localTime:localMs];
+}
+"Snapcast" forKey:MPMediaItemPropertyTitle];
     [MPNowPlayingInfoCenter defaultCenter].nowPlayingInfo = nowPlayingInfo;
 }
 
