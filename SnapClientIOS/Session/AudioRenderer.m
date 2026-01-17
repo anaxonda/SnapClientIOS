@@ -89,6 +89,8 @@
 }
 
 - (void)feedPCMData:(NSData *)pcmData serverSec:(int32_t)sec serverUsec:(int32_t)usec {
+    static int chunkCount = 0;
+    
     // 1. Create Buffer
     AVAudioFrameCount frameCount = (AVAudioFrameCount)(pcmData.length / (self.streamInfo.channels * sizeof(int16_t)));
     AVAudioPCMBuffer *buffer = [[AVAudioPCMBuffer alloc] initWithPCMFormat:self.audioFormat frameCapacity:frameCount];
@@ -100,17 +102,21 @@
     
     for (int frame = 0; frame < frameCount; frame++) {
         for (int ch = 0; ch < self.streamInfo.channels; ch++) {
-            // Convert and de-interleave
             dst[ch][frame] = src[frame * self.streamInfo.channels + ch] / 32768.0f;
         }
     }
     
     // 3. Calculate Timestamp
     double serverTimeMs = (sec * 1000.0) + (usec / 1000.0);
-    double latencyMs = (double)self.latencyMs;
-    double targetPlayTimeMs = serverTimeMs + latencyMs;
+    double targetPlayTimeMs = serverTimeMs + (double)self.latencyMs;
     
     uint64_t machTime = [self.timeProvider machTimeForServerTimeMs:targetPlayTimeMs];
+    
+    if (chunkCount++ % 100 == 0) {
+        int64_t diffTicks = (int64_t)machTime - (int64_t)mach_absolute_time();
+        double diffMs = [self.timeProvider machToMs:diffTicks];
+        NSLog(@"AudioRenderer: Latency: %ldms, ChunkTime: %.0f, Diff: %.2fms", (long)self.latencyMs, serverTimeMs, diffMs);
+    }
     
     AVAudioTime *audioTime = [[AVAudioTime alloc] initWithHostTime:machTime];
     

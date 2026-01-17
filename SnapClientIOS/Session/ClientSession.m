@@ -122,18 +122,24 @@
 }
 
 - (void)socketHandler:(SocketHandler *)socketHandler didReceiveServerSettings:(NSDictionary *)settings {
+    NSLog(@"ClientSession: Received Server Settings: %@", settings);
+    
+    NSInteger totalLatency = 0;
     if (settings[@"bufferMs"]) {
         self.cachedBufferMs = [settings[@"bufferMs"] integerValue];
+        NSLog(@"ClientSession: bufferMs = %ld", (long)self.cachedBufferMs);
     }
     
     if (settings[@"latency"]) {
         self.cachedLatency = [settings[@"latency"] integerValue];
+        NSLog(@"ClientSession: server latency = %ld", (long)self.cachedLatency);
     }
     
-    NSInteger total = self.cachedBufferMs + self.cachedLatency;
+    totalLatency = self.cachedBufferMs + self.cachedLatency;
+    NSLog(@"ClientSession: Setting total latency to %ld ms", (long)totalLatency);
     
     if (self.audioRenderer) {
-        [self.audioRenderer setLatency:total];
+        [self.audioRenderer setLatency:totalLatency];
     }
     
     if (settings[@"volume"]) {
