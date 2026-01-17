@@ -24,6 +24,8 @@
 @property (strong, nonatomic) TimeProvider *timeProvider;
 @property (strong, nonatomic) NSTimer *syncTimer;
 @property (assign, nonatomic) uint64_t lastPingTime;
+@property (assign, nonatomic) NSInteger cachedBufferMs;
+@property (assign, nonatomic) NSInteger cachedLatency;
 
 @end
 
@@ -33,6 +35,8 @@
     if (self = [super init]) {
         _host = host;
         _port = port;
+        self.cachedBufferMs = 1000;
+        self.cachedLatency = 0;
         self.timeProvider = [[TimeProvider alloc] init];
         self.socketHandler = [[SocketHandler alloc] initWithSnapServerHost:host port:port delegate:self];
         
@@ -90,6 +94,9 @@
         self.flacDecoder.delegate = self;
         self.flacDecoder.codecHeader = codecHeader;
         self.audioRenderer = [[AudioRenderer alloc] initWithStreamInfo:[self.flacDecoder getStreamInfo] timeProvider:self.timeProvider];
+        
+        NSInteger total = self.cachedBufferMs + self.cachedLatency;
+        [self.audioRenderer setLatency:total];
     }
 }
 
@@ -115,19 +122,19 @@
 }
 
 - (void)socketHandler:(SocketHandler *)socketHandler didReceiveServerSettings:(NSDictionary *)settings {
-    NSInteger totalLatency = 0;
-    
     if (settings[@"bufferMs"]) {
-        totalLatency += [settings[@"bufferMs"] integerValue];
+        self.cachedBufferMs = [settings[@"bufferMs"] integerValue];
     }
     
     if (settings[@"latency"]) {
-        totalLatency += [settings[@"latency"] integerValue];
+        self.cachedLatency = [settings[@"latency"] integerValue];
     }
     
-    // Safety minimum (e.g. 500ms) or just trust the server?
-    // Let's just trust the server.
-    [self.audioRenderer setLatency:totalLatency];
+    NSInteger total = self.cachedBufferMs + self.cachedLatency;
+    
+    if (self.audioRenderer) {
+        [self.audioRenderer setLatency:total];
+    }
     
     if (settings[@"volume"]) {
         NSInteger vol = [settings[@"volume"] integerValue];
