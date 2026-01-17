@@ -111,15 +111,8 @@
     double targetPlayTimeMs = serverTimeMs + latencyMs;
     
     uint64_t machTime = [self.timeProvider machTimeForServerTimeMs:targetPlayTimeMs];
-    uint64_t nowMach = mach_absolute_time();
     
-    // Debug Logging
-    int64_t diff = (int64_t)machTime - (int64_t)nowMach;
-    NSLog(@"AudioRenderer: Chunk ServerTime: %.2f, TargetMach: %llu, NowMach: %llu, Diff: %lld ticks", serverTimeMs, machTime, nowMach, diff);
-    
-    // DEBUG: Force immediate playback to rule out sync math errors
-    // AVAudioTime *audioTime = [[AVAudioTime alloc] initWithHostTime:machTime];
-    AVAudioTime *audioTime = nil; // Play immediately
+    AVAudioTime *audioTime = [[AVAudioTime alloc] initWithHostTime:machTime];
     
     // 4. Schedule
     [self.playerNode scheduleBuffer:buffer atTime:audioTime options:0 completionHandler:nil];
