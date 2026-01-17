@@ -115,10 +115,19 @@
 }
 
 - (void)socketHandler:(SocketHandler *)socketHandler didReceiveServerSettings:(NSDictionary *)settings {
-    if (settings[@"latency"]) {
-        NSInteger latency = [settings[@"latency"] integerValue];
-        [self.audioRenderer setLatency:latency];
+    NSInteger totalLatency = 0;
+    
+    if (settings[@"bufferMs"]) {
+        totalLatency += [settings[@"bufferMs"] integerValue];
     }
+    
+    if (settings[@"latency"]) {
+        totalLatency += [settings[@"latency"] integerValue];
+    }
+    
+    // Safety minimum (e.g. 500ms) or just trust the server?
+    // Let's just trust the server.
+    [self.audioRenderer setLatency:totalLatency];
     
     if (settings[@"volume"]) {
         NSInteger vol = [settings[@"volume"] integerValue];
