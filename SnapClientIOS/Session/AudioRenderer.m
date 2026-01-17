@@ -7,6 +7,8 @@
 
 #import "AudioRenderer.h"
 @import AVFoundation;
+#include <mach/mach.h>
+#include <mach/mach_time.h>
 
 @interface AudioRenderer ()
 
