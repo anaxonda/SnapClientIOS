@@ -169,14 +169,14 @@ typedef enum : uint16_t {
         [data getBytes:&messageType length:sizeof(uint16_t)];
         messageType = CFSwapInt16LittleToHost(messageType);
         
-        [data getBytes:&_headerRecvSec range:NSMakeRange(6, 4)];
-        _headerRecvSec = CFSwapInt32LittleToHost(_headerRecvSec);
-        [data getBytes:&_headerRecvUsec range:NSMakeRange(10, 4)];
-        _headerRecvUsec = CFSwapInt32LittleToHost(_headerRecvUsec);
-        [data getBytes:&_headerSentSec range:NSMakeRange(14, 4)];
+        [data getBytes:&_headerSentSec range:NSMakeRange(6, 4)];
         _headerSentSec = CFSwapInt32LittleToHost(_headerSentSec);
-        [data getBytes:&_headerSentUsec range:NSMakeRange(18, 4)];
+        [data getBytes:&_headerSentUsec range:NSMakeRange(10, 4)];
         _headerSentUsec = CFSwapInt32LittleToHost(_headerSentUsec);
+        [data getBytes:&_headerRecvSec range:NSMakeRange(14, 4)];
+        _headerRecvSec = CFSwapInt32LittleToHost(_headerRecvSec);
+        [data getBytes:&_headerRecvUsec range:NSMakeRange(18, 4)];
+        _headerRecvUsec = CFSwapInt32LittleToHost(_headerRecvUsec);
         
         uint32_t typedMessageLength;
         [data getBytes:&typedMessageLength range:NSMakeRange(22, sizeof(uint32_t))];
