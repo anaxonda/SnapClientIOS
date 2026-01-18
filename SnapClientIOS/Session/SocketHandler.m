@@ -34,6 +34,8 @@ typedef enum : uint16_t {
 @property (nonatomic, copy) NSString *serverHost;
 @property (nonatomic) NSUInteger serverPort;
 @property (nonatomic, strong) GCDAsyncSocket *socket;
+@property (nonatomic, assign) double lastAudioArrivalMs;
+@property (nonatomic, assign) double lastServerTimestampMs;
 
 @end
 
@@ -177,6 +179,22 @@ typedef enum : uint16_t {
         payloadSize = CFSwapInt32LittleToHost(payloadSize);
         
         NSData *payload = [data subdataWithRange:NSMakeRange(12, payloadSize)];
+        double serverTimeMs = (sec * 1000.0) + (usec / 1000.0);
+        double arrivalMs = CFAbsoluteTimeGetCurrent() * 1000.0;
+        if (self.lastAudioArrivalMs > 0.0) {
+            double gapMs = arrivalMs - self.lastAudioArrivalMs;
+            double serverGapMs = serverTimeMs - self.lastServerTimestampMs;
+            if (gapMs > 150.0 || serverGapMs > 150.0) {
+                static CFAbsoluteTime lastGapLogTime = 0;
+                CFAbsoluteTime nowTime = CFAbsoluteTimeGetCurrent();
+                if (nowTime - lastGapLogTime >= 2.0) {
+                    NSLog(@"Audio gap: arrival=%.1fms server=%.1fms", gapMs, serverGapMs);
+                    lastGapLogTime = nowTime;
+                }
+            }
+        }
+        self.lastAudioArrivalMs = arrivalMs;
+        self.lastServerTimestampMs = serverTimeMs;
         [self.delegate socketHandler:self didReceiveAudioData:payload serverSec:sec serverUsec:usec];
     } else if (tag == MESSAGE_TYPE_SERVER_SETTINGS) {
         NSDictionary *json = [self jsonDictionaryFromTypedMessage:data];

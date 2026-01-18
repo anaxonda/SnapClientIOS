@@ -98,6 +98,38 @@
     if (![self.engine startAndReturnError:&error]) {
         NSLog(@"Error starting AVAudioEngine: %@", error);
     }
+
+    [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(handleAudioSessionInterruption:) name:AVAudioSessionInterruptionNotification object:session];
+    [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(handleAudioSessionRouteChange:) name:AVAudioSessionRouteChangeNotification object:session];
+    [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(handleEngineConfigurationChange:) name:AVAudioEngineConfigurationChangeNotification object:self.engine];
+}
+
+- (void)handleAudioSessionInterruption:(NSNotification *)note {
+    NSNumber *typeValue = note.userInfo[AVAudioSessionInterruptionTypeKey];
+    AVAudioSessionInterruptionType type = (AVAudioSessionInterruptionType)[typeValue unsignedIntegerValue];
+    if (type == AVAudioSessionInterruptionTypeBegan) {
+        NSLog(@"AudioSession interruption: began");
+    } else if (type == AVAudioSessionInterruptionTypeEnded) {
+        NSNumber *optionValue = note.userInfo[AVAudioSessionInterruptionOptionKey];
+        AVAudioSessionInterruptionOptions options = (AVAudioSessionInterruptionOptions)[optionValue unsignedIntegerValue];
+        NSLog(@"AudioSession interruption: ended (options=%lu)", (unsigned long)options);
+    } else {
+        NSLog(@"AudioSession interruption: unknown (%lu)", (unsigned long)type);
+    }
+}
+
+- (void)handleAudioSessionRouteChange:(NSNotification *)note {
+    NSNumber *reasonValue = note.userInfo[AVAudioSessionRouteChangeReasonKey];
+    AVAudioSessionRouteChangeReason reason = (AVAudioSessionRouteChangeReason)[reasonValue unsignedIntegerValue];
+    NSLog(@"AudioSession route change: reason=%lu", (unsigned long)reason);
+}
+
+- (void)handleEngineConfigurationChange:(NSNotification *)note {
+    NSLog(@"AudioEngine configuration change");
+}
+
+- (void)dealloc {
+    [[NSNotificationCenter defaultCenter] removeObserver:self];
 }
 
 - (void)feedPCMData:(NSData *)pcmData serverSec:(int32_t)sec serverUsec:(int32_t)usec {
