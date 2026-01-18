@@ -19,6 +19,8 @@ NS_ASSUME_NONNULL_BEGIN
 
 // Returns the calculated server time in milliseconds based on mach time
 - (double)serverNowMs;
+// Returns the calculated server time for a given local mach time in milliseconds
+- (double)serverTimeForLocalTimeMs:(double)localTimeMs;
 
 /// Updates the time offset.
 /// @param serverTimeMs The server time in milliseconds.

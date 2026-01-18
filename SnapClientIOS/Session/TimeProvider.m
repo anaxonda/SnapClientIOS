@@ -47,6 +47,10 @@
     return [self nowMs] + self.diff;
 }
 
+- (double)serverTimeForLocalTimeMs:(double)localTimeMs {
+    return localTimeMs + self.diff;
+}
+
 - (uint64_t)machTimeForServerTimeMs:(double)serverTimeMs {
     // LocalMachMs = ServerTimeMs - Diff
     double targetLocalMs = serverTimeMs - self.diff;

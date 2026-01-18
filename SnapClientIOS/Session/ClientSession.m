@@ -76,7 +76,7 @@
         self.flacDecoder.delegate = self;
         self.flacDecoder.codecHeader = codecHeader;
         self.audioRenderer = [[AudioRenderer alloc] initWithStreamInfo:[self.flacDecoder getStreamInfo] timeProvider:self.timeProvider];
-        [self.audioRenderer setLatency:(self.cachedBufferMs + self.cachedLatency)];
+        [self.audioRenderer setServerBufferMs:self.cachedBufferMs clientLatencyMs:self.cachedLatency];
     }
 }
 
@@ -106,7 +106,7 @@
     }
     
     if (self.audioRenderer) {
-        [self.audioRenderer setLatency:(self.cachedBufferMs + self.cachedLatency)];
+        [self.audioRenderer setServerBufferMs:self.cachedBufferMs clientLatencyMs:self.cachedLatency];
     }
     
     if (settings[@"volume"]) {
