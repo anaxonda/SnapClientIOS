@@ -17,7 +17,7 @@ NS_ASSUME_NONNULL_BEGIN
 - (void)socketHandler:(SocketHandler *)socketHandler didReceiveAudioData:(NSData *)audioData serverSec:(int32_t)sec serverUsec:(int32_t)usec;
 - (void)socketHandler:(SocketHandler *)socketHandler didReceiveServerSettings:(NSDictionary *)settings;
 - (void)socketHandler:(SocketHandler *)socketHandler didReceiveStreamTags:(NSDictionary *)tags;
-- (void)socketHandler:(SocketHandler *)socketHandler didReceiveTimeSyncServerRecv:(double)t2 serverSent:(double)t3 clientSent:(uint64_t)t1 clientRecv:(uint64_t)t4;
+- (void)socketHandler:(SocketHandler *)socketHandler didReceiveTimeSyncServerMs:(double)serverTimeMs atLocalMach:(uint64_t)machTime;
 
 @end
 
