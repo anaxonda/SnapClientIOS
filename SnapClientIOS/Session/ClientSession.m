@@ -37,6 +37,7 @@
         self.cachedLatency = 0;
         self.timeProvider = [[TimeProvider alloc] init];
         self.socketHandler = [[SocketHandler alloc] initWithSnapServerHost:host port:port delegate:self];
+        self.socketHandler.timeProvider = self.timeProvider;
         self.rpcHandler = [[RpcHandler alloc] initWithHost:host port:1705];
         self.rpcHandler.delegate = self;
         [self setupRemoteCommandCenter];
@@ -84,9 +85,8 @@
     [self.flacDecoder feedAudioData:audioData serverSec:sec serverUsec:usec];
 }
 
-- (void)socketHandler:(SocketHandler *)socketHandler didReceiveTimeSyncServerMs:(double)serverTimeMs atLocalMach:(uint64_t)machTime {
-    double localMs = [self.timeProvider machToMs:machTime];
-    [self.timeProvider updateOffsetWithServerTime:serverTimeMs localTime:localMs];
+- (void)socketHandler:(SocketHandler *)socketHandler didReceiveTimeSyncServerMs:(double)serverTimeMs atLocalTimeMs:(double)localTimeMs {
+    [self.timeProvider updateOffsetWithServerTime:serverTimeMs localTime:localTimeMs];
 }
 
 - (void)socketHandler:(SocketHandler *)socketHandler didReceiveServerSettings:(NSDictionary *)settings {

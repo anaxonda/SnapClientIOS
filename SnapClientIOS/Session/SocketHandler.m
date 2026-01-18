@@ -64,7 +64,7 @@ typedef enum : uint16_t {
         NSLog(@"Socket Connect Error: %@", err);
     }
     
-    NSMutableData *base = [self baseMessageWithType:MESSAGE_TYPE_HELLO];
+    NSMutableData *base = [self baseMessageWithType:MESSAGE_TYPE_HELLO sentMs:-1];
     
     NSString *clientName = [[NSUserDefaults standardUserDefaults] stringForKey:@"ClientName"] ?: @"SnapClientIOS";
     NSString *hostName = [[NSUserDefaults standardUserDefaults] stringForKey:@"HostName"] ?: [[UIDevice currentDevice] name];
@@ -104,15 +104,34 @@ typedef enum : uint16_t {
 }
 
 - (void)sendTime {
-    NSMutableData *data = [self baseMessageWithType:MESSAGE_TYPE_TIME];
-    uint32_t payloadLen = 0;
+    double nowMs = [self currentTimeMsForMessage];
+    NSMutableData *data = [self baseMessageWithType:MESSAGE_TYPE_TIME sentMs:nowMs];
+    uint32_t payloadLen = CFSwapInt32HostToLittle(sizeof(int32_t) * 2);
     [data appendBytes:&payloadLen length:sizeof(uint32_t)];
-    
+
+    int32_t sec = (int32_t)(nowMs / 1000.0);
+    int32_t usec = (int32_t)((nowMs - (sec * 1000.0)) * 1000.0);
+    int32_t leSec = CFSwapInt32HostToLittle(sec);
+    int32_t leUsec = CFSwapInt32HostToLittle(usec);
+    [data appendBytes:&leSec length:sizeof(int32_t)];
+    [data appendBytes:&leUsec length:sizeof(int32_t)];
+
     _lastPingMach = mach_absolute_time();
     [self.socket writeData:data withTimeout:-1 tag:MESSAGE_TYPE_TIME];
 }
 
-- (NSMutableData *)baseMessageWithType:(uint16_t)type {
+- (double)currentTimeMsForMessage {
+    if (self.timeProvider) {
+        double nowMs = [self.timeProvider nowMs];
+        if (nowMs > 0.0) {
+            return nowMs;
+        }
+    }
+    NSTimeInterval now = [[NSDate date] timeIntervalSince1970];
+    return now * 1000.0;
+}
+
+- (NSMutableData *)baseMessageWithType:(uint16_t)type sentMs:(double)sentMs {
     NSMutableData *base = [[NSMutableData alloc] init];
     uint16_t leType = CFSwapInt16HostToLittle(type);
     uint16_t idField = 0;
@@ -123,12 +142,16 @@ typedef enum : uint16_t {
     [base appendBytes:&idField length:sizeof(uint16_t)];
     [base appendBytes:&refersToField length:sizeof(uint16_t)];
     
-    NSTimeInterval now = [[NSDate date] timeIntervalSince1970];
-    int32_t sec = CFSwapInt32HostToLittle((int32_t)now);
-    int32_t usec = CFSwapInt32HostToLittle((int32_t)((now - (int32_t)now) * 1000000));
+    if (sentMs < 0.0) {
+        sentMs = [self currentTimeMsForMessage];
+    }
+    int32_t sec = (int32_t)(sentMs / 1000.0);
+    int32_t usec = (int32_t)((sentMs - (sec * 1000.0)) * 1000.0);
+    int32_t leSec = CFSwapInt32HostToLittle(sec);
+    int32_t leUsec = CFSwapInt32HostToLittle(usec);
     
-    [base appendBytes:&sec length:sizeof(int32_t)];
-    [base appendBytes:&usec length:sizeof(int32_t)];
+    [base appendBytes:&leSec length:sizeof(int32_t)];
+    [base appendBytes:&leUsec length:sizeof(int32_t)];
     [base appendBytes:&zero length:sizeof(int32_t)];
     [base appendBytes:&zero length:sizeof(int32_t)];
 
@@ -260,11 +283,23 @@ typedef enum : uint16_t {
     double serverSystemMs = (_headerSentSec * 1000.0) + (_headerSentUsec / 1000.0);
     
     uint64_t rttMach = pongRecvMach - _lastPingMach;
-    
-    // Local Mach time when server sent that pong = PongRecv - RTT/2
-    uint64_t localMachAtServerSent = pongRecvMach - (rttMach / 2);
-    
-    [self.delegate socketHandler:self didReceiveTimeSyncServerMs:serverSystemMs atLocalMach:localMachAtServerSent];
+
+    double rttMs = 0.0;
+    double localNowMs = 0.0;
+    if (self.timeProvider) {
+        rttMs = [self.timeProvider machToMs:rttMach];
+        localNowMs = [self.timeProvider nowMs];
+    }
+    if (localNowMs <= 0.0) {
+        if (self.timeProvider) {
+            localNowMs = [self.timeProvider machToMs:pongRecvMach];
+        } else {
+            return;
+        }
+    }
+    double localTimeAtServerSent = localNowMs - (rttMs / 2.0);
+
+    [self.delegate socketHandler:self didReceiveTimeSyncServerMs:serverSystemMs atLocalTimeMs:localTimeAtServerSent];
 }
 
 @end
