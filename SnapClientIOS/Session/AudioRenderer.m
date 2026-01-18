@@ -104,8 +104,12 @@
     
     // 3. Calculate Target Mach Time
     double serverTimeMs = (sec * 1000.0) + (usec / 1000.0);
-    // Deduct 20ms for hardware DAC latency
-    double targetPlayTimeMs = serverTimeMs + (double)self.latencyMs - 20.0;
+    
+    // Dynamic Hardware Latency
+    double hwLatencyMs = [AVAudioSession sharedInstance].outputLatency * 1000.0;
+    
+    // Total Target = ServerCaptureTime + Buffer + Latency - HardwareDelay
+    double targetPlayTimeMs = serverTimeMs + (double)self.latencyMs - hwLatencyMs;
     
     uint64_t machTime = [self.timeProvider machTimeForServerTimeMs:targetPlayTimeMs];
     uint64_t now = mach_absolute_time();

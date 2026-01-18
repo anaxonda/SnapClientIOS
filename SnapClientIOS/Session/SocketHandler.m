@@ -102,7 +102,6 @@ typedef enum : uint16_t {
     uint32_t payloadLen = 0;
     [data appendBytes:&payloadLen length:sizeof(uint32_t)];
     
-    // RECORD PING TIME EXACTLY BEFORE SEND
     _lastPingMach = mach_absolute_time();
     [self.socket writeData:data withTimeout:-1 tag:MESSAGE_TYPE_TIME];
 }
@@ -132,7 +131,6 @@ typedef enum : uint16_t {
 }
 
 - (void)readNextMessage:(GCDAsyncSocket *)socket {
-    // 22 bytes header + 4 bytes size = 26 bytes
     [socket readDataToLength:26 withTimeout:-1 tag:MESSAGE_TYPE_BASE];
 }
 
@@ -142,11 +140,13 @@ typedef enum : uint16_t {
         uint16_t messageType;
         [data getBytes:&messageType length:sizeof(uint16_t)];
         
-        // Protocol Offsets: Sent(6-14), Received(14-22)
-        [data getBytes:&_headerSentSec range:NSMakeRange(6, 4)];
-        [data getBytes:&_headerSentUsec range:NSMakeRange(10, 4)];
-        [data getBytes:&_headerRecvSec range:NSMakeRange(14, 4)];
-        [data getBytes:&_headerRecvUsec range:NSMakeRange(18, 4)];
+        // CORRECT PROTOCOL OFFSETS (Reference: snapweb/snapstream.ts)
+        // received = 6-14
+        // sent = 14-22
+        [data getBytes:&_headerRecvSec range:NSMakeRange(6, 4)];
+        [data getBytes:&_headerRecvUsec range:NSMakeRange(10, 4)];
+        [data getBytes:&_headerSentSec range:NSMakeRange(14, 4)];
+        [data getBytes:&_headerSentUsec range:NSMakeRange(18, 4)];
         
         uint32_t typedMessageLength;
         [data getBytes:&typedMessageLength range:NSMakeRange(22, sizeof(uint32_t))];
@@ -154,10 +154,7 @@ typedef enum : uint16_t {
         if (typedMessageLength > 0) {
             [sock readDataToLength:typedMessageLength withTimeout:-1 tag:messageType];
         } else {
-            // Some messages (like TIME) might have 0 length typed payload if all info is in header
-            if (messageType == MESSAGE_TYPE_TIME) {
-                [self handleTimePayload:nil];
-            }
+            if (messageType == MESSAGE_TYPE_TIME) [self handleTimePayload:nil];
             [self readNextMessage:sock];
         }
         return;
@@ -178,14 +175,6 @@ typedef enum : uint16_t {
     } else if (tag == MESSAGE_TYPE_STREAM_TAGS) {
         NSDictionary *json = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
         if (json && json[@"STREAM"]) [self.delegate socketHandler:self didReceiveStreamTags:json[@"STREAM"]];
-    } else if (tag == MESSAGE_TYPE_CODEC_HEADER) {
-        uint32_t codecSize;
-        [data getBytes:&codecSize range:NSMakeRange(0, 4)];
-        NSString *codec = [[NSString alloc] initWithData:[data subdataWithRange:NSMakeRange(4, codecSize)] encoding:NSASCIIStringEncoding];
-        uint32_t payloadSize;
-        [data getBytes:&payloadSize range:NSMakeRange(4 + codecSize, 4)];
-        NSData *header = [data subdataWithRange:NSMakeRange(8 + codecSize, payloadSize)];
-        if ([codec isEqualToString:@"flac"]) [self.delegate socketHandler:self didReceiveCodec:codec header:header];
     } else if (tag == MESSAGE_TYPE_TIME) {
         [self handleTimePayload:data];
     }
@@ -195,15 +184,23 @@ typedef enum : uint16_t {
 
 - (void)handleTimePayload:(NSData *)data {
     uint64_t pongRecvMach = mach_absolute_time();
-    uint64_t rttMach = pongRecvMach - _lastPingMach;
     
-    // Server time is when it sent the Pong (Sent field in header)
-    double serverSentMs = (_headerSentSec * 1000.0) + (_headerSentUsec / 1000.0);
+    // FULL NTP ALGORITHM
+    // T1: _lastPingMach (Client Sent)
+    // T2: _headerRecvSec/Usec (Server Received)
+    // T3: _headerSentSec/Usec (Server Sent)
+    // T4: pongRecvMach (Client Received)
     
-    // Local Mach time when server sent that pong = PongRecv - RTT/2
-    uint64_t localMachAtServerSent = pongRecvMach - (rttMach / 2);
+    double t2 = (_headerRecvSec * 1000.0) + (_headerRecvUsec / 1000.0);
+    double t3 = (_headerSentSec * 1000.0) + (_headerSentUsec / 1000.0);
     
-    [self.delegate socketHandler:self didReceiveTimeSyncServerMs:serverSentMs atLocalMach:localMachAtServerSent];
+    // We notify the delegate with both server points and local points for high precision
+    // The ClientSession will perform the final median filtering.
+    [self.delegate socketHandler:self 
+          didReceiveTimeSyncServerRecv:t2 
+                            serverSent:t3 
+                            clientSent:_lastPingMach 
+                            clientRecv:pongRecvMach];
 }
 
 @end
