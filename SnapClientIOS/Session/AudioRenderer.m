@@ -20,6 +20,10 @@
 @property (nonatomic, assign) NSInteger latencyMs;
 @property (nonatomic, assign) float currentVolume;
 @property (nonatomic, assign) BOOL isMuted;
+@property (nonatomic, assign) double prebufferMs;
+@property (nonatomic, assign) double lowWaterMs;
+@property (nonatomic, assign) double scheduledMs;
+@property (nonatomic, assign) BOOL isPlaying;
 
 @end
 
@@ -32,6 +36,10 @@
         self.latencyMs = 1000; // Default
         self.currentVolume = 1.0;
         self.isMuted = NO;
+        self.prebufferMs = 300.0;
+        self.lowWaterMs = 100.0;
+        self.scheduledMs = 0.0;
+        self.isPlaying = NO;
         [self initAudioEngine];
     }
     return self;
@@ -90,8 +98,6 @@
     if (![self.engine startAndReturnError:&error]) {
         NSLog(@"Error starting AVAudioEngine: %@", error);
     }
-    
-    [self.playerNode play];
 }
 
 - (void)feedPCMData:(NSData *)pcmData serverSec:(int32_t)sec serverUsec:(int32_t)usec {
@@ -131,6 +137,21 @@
         NSLog(@"AudioRenderer Sync: Latency=%ldms, TargetDiff=%.2fms, HWDelay=%.2fms", (long)self.latencyMs, diffMs, hwLatencyMs);
     }
     
+    double bufferDurationMs = ((double)frameCount / (double)self.streamInfo.sampleRate) * 1000.0;
+    @synchronized (self) {
+        self.scheduledMs += bufferDurationMs;
+    }
+
+    if (!self.isPlaying) {
+        @synchronized (self) {
+            if (self.scheduledMs >= self.prebufferMs) {
+                [self.playerNode play];
+                self.isPlaying = YES;
+                NSLog(@"AudioRenderer: start after prebuffer %.0fms", self.scheduledMs);
+            }
+        }
+    }
+
     // 4. Schedule
     // If target is in the past (machTime <= now) or uninitialized, play immediately.
     // If target is more than 5 seconds in the future, it's a math error, play immediately.
@@ -142,6 +163,32 @@
     static CFAbsoluteTime lastImmediateLog = 0;
     BOOL isLate = (machTime != 0 && machTime <= now);
     BOOL isFarFuture = (machTime > (now + fiveSecsInMach));
+    __weak typeof(self) weakSelf = self;
+    void (^completionHandler)(void) = ^{
+        __strong typeof(self) strongSelf = weakSelf;
+        if (!strongSelf) {
+            return;
+        }
+        @synchronized (strongSelf) {
+            strongSelf.scheduledMs -= bufferDurationMs;
+            if (strongSelf.scheduledMs < 0.0) {
+                strongSelf.scheduledMs = 0.0;
+            }
+        }
+        static CFAbsoluteTime lastLowWaterLog = 0;
+        BOOL shouldLog = NO;
+        double scheduled = 0.0;
+        @synchronized (strongSelf) {
+            scheduled = strongSelf.scheduledMs;
+            shouldLog = strongSelf.isPlaying && scheduled < strongSelf.lowWaterMs;
+        }
+        CFAbsoluteTime nowTime = CFAbsoluteTimeGetCurrent();
+        if (shouldLog && (nowTime - lastLowWaterLog >= 5.0)) {
+            NSLog(@"AudioRenderer: low queue %.0fms", scheduled);
+            lastLowWaterLog = nowTime;
+        }
+    };
+
     if (machTime == 0 || isLate || isFarFuture) {
         immediateCount += 1;
         if (machTime == 0) {
@@ -157,10 +204,10 @@
                   immediateCount, lateCount, farFutureCount, zeroTimeCount, diffMs);
             lastImmediateLog = nowTime;
         }
-        [self.playerNode scheduleBuffer:buffer atTime:nil options:0 completionHandler:nil];
+        [self.playerNode scheduleBuffer:buffer atTime:nil options:0 completionHandler:completionHandler];
     } else {
         AVAudioTime *audioTime = [[AVAudioTime alloc] initWithHostTime:machTime];
-        [self.playerNode scheduleBuffer:buffer atTime:audioTime options:0 completionHandler:nil];
+        [self.playerNode scheduleBuffer:buffer atTime:audioTime options:0 completionHandler:completionHandler];
     }
 }
 
