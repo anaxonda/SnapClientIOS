@@ -84,9 +84,21 @@
     [self.flacDecoder feedAudioData:audioData serverSec:sec serverUsec:usec];
 }
 
-- (void)socketHandler:(SocketHandler *)socketHandler didReceiveTimeSyncServerMs:(double)serverTimeMs atLocalMach:(uint64_t)machTime {
-    double localMs = [self.timeProvider machToMs:machTime];
-    [self.timeProvider updateOffsetWithServerTime:serverTimeMs localTime:localMs];
+- (void)socketHandler:(SocketHandler *)socketHandler didReceiveTimeSyncServerRecv:(double)t2 serverSent:(double)t3 clientSent:(uint64_t)t1 clientRecv:(uint64_t)t4 {
+    double t1ms = [self.timeProvider machToMs:t1];
+    double t4ms = [self.timeProvider machToMs:t4];
+    
+    // NTP offset = ((T2 - T1) + (T3 - T4)) / 2
+    double offset = ((t2 - t1ms) + (t3 - t4ms)) / 2.0;
+    
+    // Update with mid-point reference
+    // We anchor to T4 (client received)
+    [self.timeProvider updateOffsetWithServerTime:t3 localTime:t4ms - (t4ms - t1ms)/2.0];
+    
+    // Actually, just passing the offset directly to TimeProvider is better if we change its API.
+    // For now, updateOffsetWithServerTime:localTime works if we pass:
+    // [timeProvider updateOffsetWithServerTime:t3 localTime:t3-offset];
+    [self.timeProvider updateOffsetWithServerTime:t3 localTime:(t3 - offset)];
 }
 
 - (void)socketHandler:(SocketHandler *)socketHandler didReceiveServerSettings:(NSDictionary *)settings {
