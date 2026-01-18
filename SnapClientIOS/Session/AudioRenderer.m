@@ -114,10 +114,19 @@
     uint64_t machTime = [self.timeProvider machTimeForServerTimeMs:targetPlayTimeMs];
     uint64_t now = mach_absolute_time();
     
+    // Debug Logging (every 500 chunks to avoid lag)
+    static int logCount = 0;
+    if (logCount++ % 500 == 0) {
+        int64_t diffTicks = (int64_t)machTime - (int64_t)now;
+        double diffMs = [self.timeProvider machToMs:diffTicks];
+        NSLog(@"AudioRenderer Sync: Latency=%ldms, TargetDiff=%.2fms, HWDelay=%.2fms", (long)self.latencyMs, diffMs, hwLatencyMs);
+    }
+    
     // 4. Schedule
-    // If target is too far in past (e.g. 500ms) or uninitialized, play immediately
-    uint64_t lateThreshold = [self.timeProvider msToMach:500.0];
-    if (machTime == 0 || machTime < (now - lateThreshold)) {
+    // If target is in the past (machTime <= now) or uninitialized, play immediately.
+    // If target is more than 5 seconds in the future, it's a math error, play immediately.
+    uint64_t fiveSecsInMach = [self.timeProvider msToMach:5000.0];
+    if (machTime == 0 || machTime <= now || machTime > (now + fiveSecsInMach)) {
         [self.playerNode scheduleBuffer:buffer atTime:nil options:0 completionHandler:nil];
     } else {
         AVAudioTime *audioTime = [[AVAudioTime alloc] initWithHostTime:machTime];
