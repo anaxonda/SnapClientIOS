@@ -81,12 +81,16 @@ typedef enum : uint16_t {
     
     NSData *helloJSONData = [NSJSONSerialization dataWithJSONObject:helloMessage options:0 error:nil];
     uint32_t helloJSONLength = (uint32_t)[helloJSONData length];
+    uint32_t leHelloJSONLength = CFSwapInt32HostToLittle(helloJSONLength);
+    
     NSMutableData *helloData = [[NSMutableData alloc] init];
-    [helloData appendBytes:&helloJSONLength length:sizeof(uint32_t)];
+    [helloData appendBytes:&leHelloJSONLength length:sizeof(uint32_t)];
     [helloData appendData:helloJSONData];
     
     uint32_t sizeOfHelloTypedMessage = (uint32_t)[helloData length];
-    [base appendBytes:&sizeOfHelloTypedMessage length:sizeof(uint32_t)];
+    uint32_t leSizeOfHelloTypedMessage = CFSwapInt32HostToLittle(sizeOfHelloTypedMessage);
+    
+    [base appendBytes:&leSizeOfHelloTypedMessage length:sizeof(uint32_t)];
     [base appendData:helloData];
     
     [self.socket writeData:base withTimeout:-1 tag:MESSAGE_TYPE_HELLO];
@@ -108,22 +112,21 @@ typedef enum : uint16_t {
 
 - (NSMutableData *)baseMessageWithType:(uint16_t)type {
     NSMutableData *base = [[NSMutableData alloc] init];
+    uint16_t leType = CFSwapInt16HostToLittle(type);
     uint16_t idField = 0;
     uint16_t refersToField = 0;
     int32_t zero = 0;
     
-    [base appendBytes:&type length:sizeof(uint16_t)];
+    [base appendBytes:&leType length:sizeof(uint16_t)];
     [base appendBytes:&idField length:sizeof(uint16_t)];
     [base appendBytes:&refersToField length:sizeof(uint16_t)];
     
-    // Sent Time (Client Now)
     NSTimeInterval now = [[NSDate date] timeIntervalSince1970];
-    int32_t sec = (int32_t)now;
-    int32_t usec = (int32_t)((now - sec) * 1000000);
+    int32_t sec = CFSwapInt32HostToLittle((int32_t)now);
+    int32_t usec = CFSwapInt32HostToLittle((int32_t)((now - (int32_t)now) * 1000000));
+    
     [base appendBytes:&sec length:sizeof(int32_t)];
     [base appendBytes:&usec length:sizeof(int32_t)];
-    
-    // Received Time (Zero for outbound)
     [base appendBytes:&zero length:sizeof(int32_t)];
     [base appendBytes:&zero length:sizeof(int32_t)];
 
@@ -139,17 +142,20 @@ typedef enum : uint16_t {
     if (tag == MESSAGE_TYPE_BASE) {
         uint16_t messageType;
         [data getBytes:&messageType length:sizeof(uint16_t)];
+        messageType = CFSwapInt16LittleToHost(messageType);
         
-        // CORRECT PROTOCOL OFFSETS (Reference: snapweb/snapstream.ts)
-        // received = 6-14
-        // sent = 14-22
         [data getBytes:&_headerRecvSec range:NSMakeRange(6, 4)];
+        _headerRecvSec = CFSwapInt32LittleToHost(_headerRecvSec);
         [data getBytes:&_headerRecvUsec range:NSMakeRange(10, 4)];
+        _headerRecvUsec = CFSwapInt32LittleToHost(_headerRecvUsec);
         [data getBytes:&_headerSentSec range:NSMakeRange(14, 4)];
+        _headerSentSec = CFSwapInt32LittleToHost(_headerSentSec);
         [data getBytes:&_headerSentUsec range:NSMakeRange(18, 4)];
+        _headerSentUsec = CFSwapInt32LittleToHost(_headerSentUsec);
         
         uint32_t typedMessageLength;
         [data getBytes:&typedMessageLength range:NSMakeRange(22, sizeof(uint32_t))];
+        typedMessageLength = CFSwapInt32LittleToHost(typedMessageLength);
         
         if (typedMessageLength > 0) {
             [sock readDataToLength:typedMessageLength withTimeout:-1 tag:messageType];
@@ -164,8 +170,11 @@ typedef enum : uint16_t {
         int32_t sec, usec;
         uint32_t payloadSize;
         [data getBytes:&sec range:NSMakeRange(0, 4)];
+        sec = CFSwapInt32LittleToHost(sec);
         [data getBytes:&usec range:NSMakeRange(4, 4)];
+        usec = CFSwapInt32LittleToHost(usec);
         [data getBytes:&payloadSize range:NSMakeRange(8, 4)];
+        payloadSize = CFSwapInt32LittleToHost(payloadSize);
         
         NSData *payload = [data subdataWithRange:NSMakeRange(12, payloadSize)];
         [self.delegate socketHandler:self didReceiveAudioData:payload serverSec:sec serverUsec:usec];
@@ -175,6 +184,19 @@ typedef enum : uint16_t {
     } else if (tag == MESSAGE_TYPE_STREAM_TAGS) {
         NSDictionary *json = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
         if (json && json[@"STREAM"]) [self.delegate socketHandler:self didReceiveStreamTags:json[@"STREAM"]];
+    } else if (tag == MESSAGE_TYPE_CODEC_HEADER) {
+        uint32_t codecSize;
+        [data getBytes:&codecSize range:NSMakeRange(0, 4)];
+        codecSize = CFSwapInt32LittleToHost(codecSize);
+        
+        NSString *codec = [[NSString alloc] initWithData:[data subdataWithRange:NSMakeRange(4, codecSize)] encoding:NSASCIIStringEncoding];
+        
+        uint32_t payloadSize;
+        [data getBytes:&payloadSize range:NSMakeRange(4 + codecSize, 4)];
+        payloadSize = CFSwapInt32LittleToHost(payloadSize);
+        
+        NSData *header = [data subdataWithRange:NSMakeRange(8 + codecSize, payloadSize)];
+        if ([codec isEqualToString:@"flac"]) [self.delegate socketHandler:self didReceiveCodec:codec header:header];
     } else if (tag == MESSAGE_TYPE_TIME) {
         [self handleTimePayload:data];
     }
@@ -184,18 +206,9 @@ typedef enum : uint16_t {
 
 - (void)handleTimePayload:(NSData *)data {
     uint64_t pongRecvMach = mach_absolute_time();
-    
-    // FULL NTP ALGORITHM
-    // T1: _lastPingMach (Client Sent)
-    // T2: _headerRecvSec/Usec (Server Received)
-    // T3: _headerSentSec/Usec (Server Sent)
-    // T4: pongRecvMach (Client Received)
-    
     double t2 = (_headerRecvSec * 1000.0) + (_headerRecvUsec / 1000.0);
     double t3 = (_headerSentSec * 1000.0) + (_headerSentUsec / 1000.0);
     
-    // We notify the delegate with both server points and local points for high precision
-    // The ClientSession will perform the final median filtering.
     [self.delegate socketHandler:self 
           didReceiveTimeSyncServerRecv:t2 
                             serverSent:t3 
