@@ -2,8 +2,6 @@
 //  ClientSession.m
 //  SnapClientIOS
 //
-//  Created by Lee Jun Kit on 31/12/20.
-//
 
 #import "ClientSession.h"
 #import "SocketHandler.h"
@@ -23,7 +21,7 @@
 @property (strong, nonatomic) AudioRenderer *audioRenderer;
 @property (strong, nonatomic) TimeProvider *timeProvider;
 @property (strong, nonatomic) NSTimer *syncTimer;
-@property (assign, nonatomic) uint64_t lastPingTime;
+
 @property (assign, nonatomic) NSInteger cachedBufferMs;
 @property (assign, nonatomic) NSInteger cachedLatency;
 
@@ -39,43 +37,26 @@
         self.cachedLatency = 0;
         self.timeProvider = [[TimeProvider alloc] init];
         self.socketHandler = [[SocketHandler alloc] initWithSnapServerHost:host port:port delegate:self];
-        
-        // Initialize RPC Handler
         self.rpcHandler = [[RpcHandler alloc] initWithHost:host port:1705];
         self.rpcHandler.delegate = self;
-        
         [self setupRemoteCommandCenter];
     }
     return self;
 }
 
 - (void)setupRemoteCommandCenter {
-    MPRemoteCommandCenter *commandCenter = [MPRemoteCommandCenter sharedCommandCenter];
-    [commandCenter.playCommand setEnabled:YES];
-    [commandCenter.playCommand addTargetWithHandler:^MPRemoteCommandHandlerStatus(MPRemoteCommandEvent * _Nonnull event) {
-        return MPRemoteCommandHandlerStatusSuccess;
-    }];
-    [commandCenter.pauseCommand setEnabled:YES];
-    [commandCenter.pauseCommand addTargetWithHandler:^MPRemoteCommandHandlerStatus(MPRemoteCommandEvent * _Nonnull event) {
-        return MPRemoteCommandHandlerStatusSuccess;
-    }];
+    MPRemoteCommandCenter *cc = [MPRemoteCommandCenter sharedCommandCenter];
+    [cc.playCommand setEnabled:YES];
+    [cc.pauseCommand setEnabled:YES];
 }
 
 - (void)start {
-    // Start Sync Timer (every 1 second)
     self.syncTimer = [NSTimer scheduledTimerWithTimeInterval:1.0 target:self selector:@selector(sendSync) userInfo:nil repeats:YES];
-    
-    // Connect RPC
     [self.rpcHandler connect];
-    
-    // Initial Now Playing Info
-    NSMutableDictionary *nowPlayingInfo = [[NSMutableDictionary alloc] init];
-    [nowPlayingInfo setObject:@"Snapcast" forKey:MPMediaItemPropertyTitle];
-    [MPNowPlayingInfoCenter defaultCenter].nowPlayingInfo = nowPlayingInfo;
+    [MPNowPlayingInfoCenter defaultCenter].nowPlayingInfo = @{MPMediaItemPropertyTitle: @"Snapcast"};
 }
 
 - (void)sendSync {
-    self.lastPingTime = mach_absolute_time();
     [self.socketHandler sendTime];
 }
 
@@ -88,109 +69,74 @@
 }
 
 #pragma mark - SocketHandlerDelegate
+
 - (void)socketHandler:(SocketHandler *)socketHandler didReceiveCodec:(NSString *)codec header:(NSData *)codecHeader {
     if ([codec isEqualToString:@"flac"]) {
         self.flacDecoder = [[FlacDecoder alloc] init];
         self.flacDecoder.delegate = self;
         self.flacDecoder.codecHeader = codecHeader;
         self.audioRenderer = [[AudioRenderer alloc] initWithStreamInfo:[self.flacDecoder getStreamInfo] timeProvider:self.timeProvider];
-        
-        NSInteger total = self.cachedBufferMs + self.cachedLatency;
-        [self.audioRenderer setLatency:total];
+        [self.audioRenderer setLatency:(self.cachedBufferMs + self.cachedLatency)];
     }
 }
 
 - (void)socketHandler:(SocketHandler *)socketHandler didReceiveAudioData:(NSData *)audioData serverSec:(int32_t)sec serverUsec:(int32_t)usec {
-    if (![self.flacDecoder feedAudioData:audioData serverSec:sec serverUsec:usec]) {
-        NSLog(@"Error feeding audio data to the decoder");
-    }
+    [self.flacDecoder feedAudioData:audioData serverSec:sec serverUsec:usec];
 }
 
-- (void)socketHandler:(SocketHandler *)socketHandler didReceiveTimeAtClient:(uint64_t)clientRecvMachTime serverReceivedSec:(int32_t)serverRecvSec serverReceivedUsec:(int32_t)serverRecvUsec serverSentSec:(int32_t)serverSentSec serverSentUsec:(int32_t)serverSentUsec {
-    
-    // Calculate RTT
-    uint64_t rttMach = clientRecvMachTime - self.lastPingTime;
-    
-    // Server Time = ServerSent
-    double serverSentMs = (serverSentSec * 1000.0) + (serverSentUsec / 1000.0);
-    
-    // Local Time (when ServerSent happened) = ClientRecv - RTT/2
-    uint64_t localMachAtServerSent = clientRecvMachTime - (rttMach / 2);
-    double localMs = [self.timeProvider machToMs:localMachAtServerSent];
-    
-    [self.timeProvider updateOffsetWithServerTime:serverSentMs localTime:localMs];
+- (void)socketHandler:(SocketHandler *)socketHandler didReceiveTimeSyncServerMs:(double)serverTimeMs atLocalMach:(uint64_t)machTime {
+    double localMs = [self.timeProvider machToMs:machTime];
+    [self.timeProvider updateOffsetWithServerTime:serverTimeMs localTime:localMs];
 }
 
 - (void)socketHandler:(SocketHandler *)socketHandler didReceiveServerSettings:(NSDictionary *)settings {
-    NSLog(@"ClientSession: Raw Server Settings: %@", settings);
+    NSLog(@"ClientSession Settings: %@", settings);
     
-    // Check for various possible keys for buffer
-    if (settings[@"bufferMs"]) {
-        self.cachedBufferMs = [settings[@"bufferMs"] integerValue];
-    } else if (settings[@"buffer_ms"]) {
-        self.cachedBufferMs = [settings[@"buffer_ms"] integerValue];
-    } else if (settings[@"buffer"]) {
-        self.cachedBufferMs = [settings[@"buffer"] integerValue];
+    // Robust key search for buffer duration
+    NSArray *keys = @[@"bufferMs", @"buffer_ms", @"buffer", @"bufferDuration"];
+    for (NSString *key in keys) {
+        if (settings[key]) {
+            self.cachedBufferMs = [settings[key] integerValue];
+            break;
+        }
     }
     
     if (settings[@"latency"]) {
         self.cachedLatency = [settings[@"latency"] integerValue];
     }
     
-    NSInteger total = self.cachedBufferMs + self.cachedLatency;
-    NSLog(@"ClientSession: Parsed Buffer: %ld, Latency: %ld -> Total: %ld", (long)self.cachedBufferMs, (long)self.cachedLatency, (long)total);
-    
     if (self.audioRenderer) {
-        [self.audioRenderer setLatency:total];
+        [self.audioRenderer setLatency:(self.cachedBufferMs + self.cachedLatency)];
     }
     
     if (settings[@"volume"]) {
-        NSInteger vol = [settings[@"volume"] integerValue];
-        [self.audioRenderer setVolume:(float)vol / 100.0];
+        [self.audioRenderer setVolume:([settings[@"volume"] floatValue] / 100.0)];
     }
     
     if (settings[@"muted"]) {
-        BOOL muted = [settings[@"muted"] boolValue];
-        [self.audioRenderer setMuted:muted];
+        [self.audioRenderer setMuted:[settings[@"muted"] boolValue]];
     }
 }
 
 - (void)socketHandler:(SocketHandler *)socketHandler didReceiveStreamTags:(NSDictionary *)tags {
     dispatch_async(dispatch_get_main_queue(), ^{
-        NSMutableDictionary *nowPlayingInfo = [[NSMutableDictionary alloc] initWithDictionary:[MPNowPlayingInfoCenter defaultCenter].nowPlayingInfo];
-        
-        if (tags[@"TITLE"]) {
-            [nowPlayingInfo setObject:tags[@"TITLE"] forKey:MPMediaItemPropertyTitle];
-        }
-        if (tags[@"ARTIST"]) {
-            [nowPlayingInfo setObject:tags[@"ARTIST"] forKey:MPMediaItemPropertyArtist];
-        }
-        if (tags[@"ALBUM"]) {
-            [nowPlayingInfo setObject:tags[@"ALBUM"] forKey:MPMediaItemPropertyAlbumTitle];
-        }
-        
-        // Cover Art (Base64)
+        NSMutableDictionary *info = [[NSMutableDictionary alloc] initWithDictionary:[MPNowPlayingInfoCenter defaultCenter].nowPlayingInfo];
+        if (tags[@"TITLE"]) info[MPMediaItemPropertyTitle] = tags[@"TITLE"];
+        if (tags[@"ARTIST"]) info[MPMediaItemPropertyArtist] = tags[@"ARTIST"];
+        if (tags[@"ALBUM"]) info[MPMediaItemPropertyAlbumTitle] = tags[@"ALBUM"];
         if (tags[@"COVERART"]) {
-            NSData *imageData = [[NSData alloc] initWithBase64EncodedString:tags[@"COVERART"] options:NSDataBase64DecodingIgnoreUnknownCharacters];
-            if (imageData) {
-                UIImage *image = [UIImage imageWithData:imageData];
-                if (image) {
-                    MPMediaItemArtwork *artwork = [[MPMediaItemArtwork alloc] initWithBoundsSize:image.size requestHandler:^UIImage * _Nonnull(CGSize size) {
-                        return image;
-                    }];
-                    [nowPlayingInfo setObject:artwork forKey:MPMediaItemPropertyArtwork];
-                }
+            NSData *data = [[NSData alloc] initWithBase64EncodedString:tags[@"COVERART"] options:NSDataBase64DecodingIgnoreUnknownCharacters];
+            UIImage *img = [UIImage imageWithData:data];
+            if (img) {
+                info[MPMediaItemPropertyArtwork] = [[MPMediaItemArtwork alloc] initWithBoundsSize:img.size requestHandler:^UIImage * _Nonnull(CGSize size) { return img; }];
             }
         }
-        
-        [MPNowPlayingInfoCenter defaultCenter].nowPlayingInfo = nowPlayingInfo;
+        [MPNowPlayingInfoCenter defaultCenter].nowPlayingInfo = info;
     });
 }
 
 #pragma mark - RpcHandlerDelegate
 - (void)rpcHandler:(RpcHandler *)handler didReceiveServerStatus:(NSDictionary *)status {
-    NSLog(@"RPC Status Received: %@", status);
-    // Notify UI about streams
     [[NSNotificationCenter defaultCenter] postNotificationName:@"SnapClientServerStatusUpdated" object:nil userInfo:status];
 }
 
