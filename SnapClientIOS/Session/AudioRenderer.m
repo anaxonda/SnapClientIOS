@@ -71,13 +71,11 @@
     
     [self.engine attachNode:self.playerNode];
     
-    // Create Audio Format
-    // We use Float32 because AVAudioEngine's mixer node expects it.
-    // We will convert Int16 -> Float32 manually.
+    // Create Audio Format (Float32 Non-Interleaved)
     self.audioFormat = [[AVAudioFormat alloc] initWithCommonFormat:AVAudioPCMFormatFloat32
                                                         sampleRate:self.streamInfo.sampleRate
                                                           channels:self.streamInfo.channels
-                                                       interleaved:NO]; // Float32 is usually non-interleaved in AVAudioEngine
+                                                       interleaved:NO];
     
     [self.engine connect:self.playerNode to:self.engine.mainMixerNode format:self.audioFormat];
     
@@ -89,8 +87,6 @@
 }
 
 - (void)feedPCMData:(NSData *)pcmData serverSec:(int32_t)sec serverUsec:(int32_t)usec {
-    static int chunkCount = 0;
-    
     // 1. Create Buffer
     AVAudioFrameCount frameCount = (AVAudioFrameCount)(pcmData.length / (self.streamInfo.channels * sizeof(int16_t)));
     AVAudioPCMBuffer *buffer = [[AVAudioPCMBuffer alloc] initWithPCMFormat:self.audioFormat frameCapacity:frameCount];
@@ -106,32 +102,23 @@
         }
     }
     
-    // 3. Calculate Timestamp
+    // 3. Calculate Target Mach Time
     double serverTimeMs = (sec * 1000.0) + (usec / 1000.0);
-    double latencyMs = (double)self.latencyMs;
-    
-    // Total Target = ServerCaptureTime + Buffer + Latency - HardwareDelay
-    // Deduct 20ms for iPad DAC/Hardware buffer
-    double targetPlayTimeMs = serverTimeMs + latencyMs - 20.0;
+    // Deduct 20ms for hardware DAC latency
+    double targetPlayTimeMs = serverTimeMs + (double)self.latencyMs - 20.0;
     
     uint64_t machTime = [self.timeProvider machTimeForServerTimeMs:targetPlayTimeMs];
     uint64_t now = mach_absolute_time();
     
-    // Safety check: if target is more than 500ms in the past, or uninitialized, play immediately
-    if (machTime < (now - [self.timeProvider msToMach:500.0]) || machTime == 0) {
-        NSLog(@"AudioRenderer: Schedule time too old or invalid, playing immediately");
+    // 4. Schedule
+    // If target is too far in past (e.g. 500ms) or uninitialized, play immediately
+    uint64_t lateThreshold = [self.timeProvider msToMach:500.0];
+    if (machTime == 0 || machTime < (now - lateThreshold)) {
         [self.playerNode scheduleBuffer:buffer atTime:nil options:0 completionHandler:nil];
     } else {
         AVAudioTime *audioTime = [[AVAudioTime alloc] initWithHostTime:machTime];
         [self.playerNode scheduleBuffer:buffer atTime:audioTime options:0 completionHandler:nil];
     }
-}"AudioRenderer: Latency: %ldms, ChunkTime: %.0f, Diff: %.2fms", (long)self.latencyMs, serverTimeMs, diffMs);
-    }
-    
-    AVAudioTime *audioTime = [[AVAudioTime alloc] initWithHostTime:machTime];
-    
-    // 4. Schedule
-    [self.playerNode scheduleBuffer:buffer atTime:audioTime options:0 completionHandler:nil];
 }
 
 @end

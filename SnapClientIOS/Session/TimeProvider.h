@@ -15,6 +15,7 @@ NS_ASSUME_NONNULL_BEGIN
 - (double)nowMs;
 
 - (double)machToMs:(uint64_t)machTime;
+- (uint64_t)msToMach:(double)ms;
 
 // Returns the calculated server time in milliseconds based on mach time
 - (double)serverNowMs;
