@@ -24,6 +24,7 @@
 @property (atomic) BOOL isDecoding;
 @property (atomic, assign) int32_t currentSec;
 @property (atomic, assign) int32_t currentUsec;
+@property (atomic, assign) NSUInteger dropCount;
 
 @end
 
@@ -32,11 +33,12 @@
 - (instancetype)init {
     if (self = [super init]) {
         decoderQueue = dispatch_queue_create("ljk.SnapClientIOS.decoderqueue", NULL);
-        TPCircularBufferInit(&circularBuffer, 8192);
+        TPCircularBufferInit(&circularBuffer, 262144);
         if ((decoder = FLAC__stream_decoder_new()) == NULL) {
             NSLog(@"Error allocating FLAC decoder!");
             @throw NSInternalInconsistencyException;
         }
+        self.dropCount = 0;
     }
     return self;
 }
@@ -69,6 +71,10 @@
     }
     
     if (!TPCircularBufferProduceBytes(&circularBuffer, [audioData bytes], (uint32_t)audioData.length)) {
+        self.dropCount += 1;
+        if (self.dropCount == 1 || (self.dropCount % 50) == 0) {
+            NSLog(@"Decoder buffer full, dropped %lu chunks", (unsigned long)self.dropCount);
+        }
         return NO;
     }
     
