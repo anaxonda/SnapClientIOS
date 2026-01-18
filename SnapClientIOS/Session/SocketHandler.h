@@ -6,6 +6,7 @@
 //
 
 #import <Foundation/Foundation.h>
+#import "TimeProvider.h"
 
 NS_ASSUME_NONNULL_BEGIN
 
@@ -17,13 +18,14 @@ NS_ASSUME_NONNULL_BEGIN
 - (void)socketHandler:(SocketHandler *)socketHandler didReceiveAudioData:(NSData *)audioData serverSec:(int32_t)sec serverUsec:(int32_t)usec;
 - (void)socketHandler:(SocketHandler *)socketHandler didReceiveServerSettings:(NSDictionary *)settings;
 - (void)socketHandler:(SocketHandler *)socketHandler didReceiveStreamTags:(NSDictionary *)tags;
-- (void)socketHandler:(SocketHandler *)socketHandler didReceiveTimeSyncServerMs:(double)serverTimeMs atLocalMach:(uint64_t)machTime;
+- (void)socketHandler:(SocketHandler *)socketHandler didReceiveTimeSyncServerMs:(double)serverTimeMs atLocalTimeMs:(double)localTimeMs;
 
 @end
 
 @interface SocketHandler : NSObject
 
 @property (nonatomic, weak) id<SocketHandlerDelegate> delegate;
+@property (nonatomic, weak) TimeProvider *timeProvider;
 
 - (instancetype)initWithSnapServerHost:(NSString *)host port:(NSUInteger)port delegate:(id<SocketHandlerDelegate>)delegate;
 - (void)start;

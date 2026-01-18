@@ -163,10 +163,37 @@
                                                        interleaved:NO];
 
     [self.engine connect:self.playerNode to:self.engine.mainMixerNode format:self.audioFormat];
-
+    
     if (![self.engine startAndReturnError:&error]) {
         NSLog(@"Error starting AVAudioEngine: %@", error);
     }
+
+    __weak typeof(self) weakSelf = self;
+    [self.timeProvider setAudioClockBlock:^BOOL(double *audioNowMs, uint64_t *hostTime) {
+        __strong typeof(self) strongSelf = weakSelf;
+        if (!strongSelf) {
+            return NO;
+        }
+        AVAudioTime *nodeTime = strongSelf.playerNode.lastRenderTime;
+        if (!nodeTime || nodeTime.hostTime == 0) {
+            return NO;
+        }
+        AVAudioTime *playerTime = [strongSelf.playerNode playerTimeForNodeTime:nodeTime];
+        if (!playerTime || playerTime.sampleRate <= 0 || playerTime.sampleTime < 0) {
+            return NO;
+        }
+        double audioMs = ((double)playerTime.sampleTime / playerTime.sampleRate) * 1000.0;
+        if (audioMs <= 0.0) {
+            return NO;
+        }
+        if (audioNowMs) {
+            *audioNowMs = audioMs;
+        }
+        if (hostTime) {
+            *hostTime = nodeTime.hostTime;
+        }
+        return YES;
+    }];
 
     [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(handleAudioSessionInterruption:) name:AVAudioSessionInterruptionNotification object:session];
     [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(handleAudioSessionRouteChange:) name:AVAudioSessionRouteChangeNotification object:session];
@@ -259,7 +286,7 @@
     double playTimeMs = self.nextPlayTimeMs + hwLatencyMs - self.playbackBufferMs;
     [self fillBuffer:buffer playTimeMs:playTimeMs];
 
-    uint64_t hostTime = [self.timeProvider msToMach:self.nextPlayTimeMs];
+    uint64_t hostTime = [self.timeProvider hostTimeForAudioTimeMs:self.nextPlayTimeMs];
     uint64_t now = mach_absolute_time();
     AVAudioTime *audioTime = nil;
     if (hostTime > now) {
