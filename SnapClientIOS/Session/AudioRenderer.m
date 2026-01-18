@@ -10,6 +10,62 @@
 #include <mach/mach.h>
 #include <mach/mach_time.h>
 
+@interface PCMChunk : NSObject
+
+@property (nonatomic, strong) NSData *data;
+@property (nonatomic, assign) double timestampMs;
+@property (nonatomic, assign) NSUInteger frameCount;
+@property (nonatomic, assign) NSUInteger idx;
+@property (nonatomic, assign) NSUInteger channels;
+@property (nonatomic, assign) double sampleRate;
+
+- (instancetype)initWithData:(NSData *)data
+                  timestampMs:(double)timestampMs
+                    channels:(NSUInteger)channels
+                   sampleRate:(double)sampleRate;
+- (double)startMs;
+- (double)durationMs;
+- (NSUInteger)remainingFrames;
+
+@end
+
+@implementation PCMChunk
+
+- (instancetype)initWithData:(NSData *)data
+                  timestampMs:(double)timestampMs
+                    channels:(NSUInteger)channels
+                   sampleRate:(double)sampleRate {
+    if (self = [super init]) {
+        _data = data;
+        _timestampMs = timestampMs;
+        _channels = channels;
+        _sampleRate = sampleRate;
+        _frameCount = (NSUInteger)(data.length / (channels * sizeof(int16_t)));
+        _idx = 0;
+    }
+    return self;
+}
+
+- (double)startMs {
+    return self.timestampMs + ((double)self.idx / self.sampleRate) * 1000.0;
+}
+
+- (double)durationMs {
+    if (self.idx >= self.frameCount) {
+        return 0.0;
+    }
+    return ((double)(self.frameCount - self.idx) / self.sampleRate) * 1000.0;
+}
+
+- (NSUInteger)remainingFrames {
+    if (self.idx >= self.frameCount) {
+        return 0;
+    }
+    return self.frameCount - self.idx;
+}
+
+@end
+
 @interface AudioRenderer ()
 
 @property (nonatomic, strong) StreamInfo *streamInfo;
@@ -17,13 +73,18 @@
 @property (nonatomic, strong) AVAudioEngine *engine;
 @property (nonatomic, strong) AVAudioPlayerNode *playerNode;
 @property (nonatomic, strong) AVAudioFormat *audioFormat;
-@property (nonatomic, assign) NSInteger latencyMs;
+@property (nonatomic, assign) NSInteger serverBufferMs;
+@property (nonatomic, assign) NSInteger clientLatencyMs;
+@property (nonatomic, assign) NSInteger playbackBufferMs;
+@property (nonatomic, assign) double bufferDurationMs;
+@property (nonatomic, assign) AVAudioFrameCount bufferFrameCount;
+@property (nonatomic, assign) NSInteger audioBufferCount;
 @property (nonatomic, assign) float currentVolume;
 @property (nonatomic, assign) BOOL isMuted;
-@property (nonatomic, assign) double prebufferMs;
-@property (nonatomic, assign) double lowWaterMs;
-@property (nonatomic, assign) double scheduledMs;
+@property (nonatomic, assign) double nextPlayTimeMs;
 @property (nonatomic, assign) BOOL isPlaying;
+@property (nonatomic, strong) NSMutableArray<PCMChunk *> *chunks;
+@property (nonatomic, strong) PCMChunk *currentChunk;
 
 @end
 
@@ -33,21 +94,29 @@
     if (self = [super init]) {
         self.streamInfo = info;
         self.timeProvider = timeProvider;
-        self.latencyMs = 1000; // Default
+        self.serverBufferMs = 1000;
+        self.clientLatencyMs = 0;
+        [self updatePlaybackBuffer];
+        self.bufferDurationMs = 80.0;
+        [self updateBufferFrameCount];
+        self.audioBufferCount = 3;
         self.currentVolume = 1.0;
         self.isMuted = NO;
-        self.prebufferMs = 300.0;
-        self.lowWaterMs = 100.0;
-        self.scheduledMs = 0.0;
+        self.chunks = [NSMutableArray array];
+        self.currentChunk = nil;
         self.isPlaying = NO;
+        self.nextPlayTimeMs = 0.0;
         [self initAudioEngine];
     }
     return self;
 }
 
-- (void)setLatency:(NSInteger)latencyMs {
-    self.latencyMs = latencyMs;
-    NSLog(@"AudioRenderer: Latency updated to %ld ms", (long)latencyMs);
+- (void)setServerBufferMs:(NSInteger)bufferMs clientLatencyMs:(NSInteger)latencyMs {
+    self.serverBufferMs = bufferMs;
+    self.clientLatencyMs = latencyMs;
+    [self updatePlaybackBuffer];
+    NSLog(@"AudioRenderer: Server buffer=%ldms, client latency=%ldms, playback buffer=%ldms",
+          (long)self.serverBufferMs, (long)self.clientLatencyMs, (long)self.playbackBufferMs);
 }
 
 - (void)setVolume:(float)volume {
@@ -84,17 +153,17 @@
 
     self.engine = [[AVAudioEngine alloc] init];
     self.playerNode = [[AVAudioPlayerNode alloc] init];
-    
+
     [self.engine attachNode:self.playerNode];
-    
+
     // Create Audio Format (Float32 Non-Interleaved)
     self.audioFormat = [[AVAudioFormat alloc] initWithCommonFormat:AVAudioPCMFormatFloat32
                                                         sampleRate:self.streamInfo.sampleRate
                                                           channels:self.streamInfo.channels
                                                        interleaved:NO];
-    
+
     [self.engine connect:self.playerNode to:self.engine.mainMixerNode format:self.audioFormat];
-    
+
     if (![self.engine startAndReturnError:&error]) {
         NSLog(@"Error starting AVAudioEngine: %@", error);
     }
@@ -133,113 +202,254 @@
 }
 
 - (void)feedPCMData:(NSData *)pcmData serverSec:(int32_t)sec serverUsec:(int32_t)usec {
-    // 1. Create Buffer
-    AVAudioFrameCount frameCount = (AVAudioFrameCount)(pcmData.length / (self.streamInfo.channels * sizeof(int16_t)));
-    AVAudioPCMBuffer *buffer = [[AVAudioPCMBuffer alloc] initWithPCMFormat:self.audioFormat frameCapacity:frameCount];
-    buffer.frameLength = frameCount;
-    
-    // 2. Convert Int16 (Interleaved) -> Float32 (Non-Interleaved)
-    int16_t *src = (int16_t *)pcmData.bytes;
-    float *const *dst = buffer.floatChannelData;
-    
-    for (int frame = 0; frame < frameCount; frame++) {
-        for (int ch = 0; ch < self.streamInfo.channels; ch++) {
-            dst[ch][frame] = src[frame * self.streamInfo.channels + ch] / 32768.0f;
-        }
-    }
-    
-    // 3. Calculate Target Mach Time
     double serverTimeMs = (sec * 1000.0) + (usec / 1000.0);
-    
-    // Dynamic Hardware Latency
-    double hwLatencyMs = [AVAudioSession sharedInstance].outputLatency * 1000.0;
-    
-    // Total Target = ServerCaptureTime + Buffer + Latency - HardwareDelay
-    double targetPlayTimeMs = serverTimeMs + (double)self.latencyMs - hwLatencyMs;
-    
-    uint64_t machTime = [self.timeProvider machTimeForServerTimeMs:targetPlayTimeMs];
-    uint64_t now = mach_absolute_time();
-    int64_t diffTicks = (int64_t)machTime - (int64_t)now;
-    uint64_t absDiffTicks = (uint64_t)llabs(diffTicks);
-    double diffMs = [self.timeProvider machToMs:absDiffTicks] * (diffTicks < 0 ? -1.0 : 1.0);
-    
-    // Debug Logging (every 500 chunks to avoid lag)
-    static int logCount = 0;
-    if (logCount++ % 500 == 0) {
-        NSLog(@"AudioRenderer Sync: Latency=%ldms, TargetDiff=%.2fms, HWDelay=%.2fms", (long)self.latencyMs, diffMs, hwLatencyMs);
-    }
-    
-    double bufferDurationMs = ((double)frameCount / (double)self.streamInfo.sampleRate) * 1000.0;
+    PCMChunk *chunk = [[PCMChunk alloc] initWithData:pcmData
+                                          timestampMs:serverTimeMs
+                                            channels:self.streamInfo.channels
+                                           sampleRate:self.streamInfo.sampleRate];
     @synchronized (self) {
-        self.scheduledMs += bufferDurationMs;
+        [self.chunks addObject:chunk];
+        [self dropOldChunksLocked];
+    }
+    [self startPlaybackIfNeeded];
+}
+
+- (void)updatePlaybackBuffer {
+    NSInteger playback = self.serverBufferMs - self.clientLatencyMs;
+    if (playback < 0) {
+        playback = 0;
+    }
+    self.playbackBufferMs = playback;
+}
+
+- (void)updateBufferFrameCount {
+    if (self.streamInfo.sampleRate <= 0) {
+        self.bufferFrameCount = 0;
+        return;
+    }
+    double frames = floor((self.bufferDurationMs * self.streamInfo.sampleRate) / 1000.0);
+    if (frames < 1) {
+        frames = 1;
+    }
+    self.bufferFrameCount = (AVAudioFrameCount)frames;
+}
+
+- (void)startPlaybackIfNeeded {
+    if (self.isPlaying || self.bufferFrameCount == 0) {
+        return;
+    }
+    self.isPlaying = YES;
+    self.nextPlayTimeMs = [self.timeProvider nowMs] + 100.0;
+    for (NSInteger i = 0; i < self.audioBufferCount; i++) {
+        [self scheduleNextBuffer];
+    }
+    [self.playerNode play];
+}
+
+- (void)scheduleNextBuffer {
+    if (!self.isPlaying || self.bufferFrameCount == 0) {
+        return;
     }
 
-    if (!self.isPlaying) {
-        @synchronized (self) {
-            if (self.scheduledMs >= self.prebufferMs) {
-                [self.playerNode play];
-                self.isPlaying = YES;
-                NSLog(@"AudioRenderer: start after prebuffer %.0fms", self.scheduledMs);
-            }
-        }
+    AVAudioPCMBuffer *buffer = [[AVAudioPCMBuffer alloc] initWithPCMFormat:self.audioFormat
+                                                             frameCapacity:self.bufferFrameCount];
+    buffer.frameLength = self.bufferFrameCount;
+
+    double hwLatencyMs = [AVAudioSession sharedInstance].outputLatency * 1000.0;
+    double playTimeMs = self.nextPlayTimeMs + hwLatencyMs - self.playbackBufferMs;
+    [self fillBuffer:buffer playTimeMs:playTimeMs];
+
+    uint64_t hostTime = [self.timeProvider msToMach:self.nextPlayTimeMs];
+    uint64_t now = mach_absolute_time();
+    AVAudioTime *audioTime = nil;
+    if (hostTime > now) {
+        audioTime = [[AVAudioTime alloc] initWithHostTime:hostTime];
     }
 
-    // 4. Schedule
-    // If target is in the past (machTime <= now) or uninitialized, play immediately.
-    // If target is more than 5 seconds in the future, it's a math error, play immediately.
-    uint64_t fiveSecsInMach = [self.timeProvider msToMach:5000.0];
-    static uint64_t immediateCount = 0;
-    static uint64_t lateCount = 0;
-    static uint64_t farFutureCount = 0;
-    static uint64_t zeroTimeCount = 0;
-    static CFAbsoluteTime lastImmediateLog = 0;
-    BOOL isLate = (machTime != 0 && machTime <= now);
-    BOOL isFarFuture = (machTime > (now + fiveSecsInMach));
     __weak typeof(self) weakSelf = self;
-    void (^completionHandler)(void) = ^{
+    [self.playerNode scheduleBuffer:buffer atTime:audioTime options:0 completionHandler:^{
         __strong typeof(self) strongSelf = weakSelf;
         if (!strongSelf) {
             return;
         }
-        @synchronized (strongSelf) {
-            strongSelf.scheduledMs -= bufferDurationMs;
-            if (strongSelf.scheduledMs < 0.0) {
-                strongSelf.scheduledMs = 0.0;
+        [strongSelf scheduleNextBuffer];
+    }];
+
+    self.nextPlayTimeMs += self.bufferDurationMs;
+}
+
+- (void)fillBuffer:(AVAudioPCMBuffer *)buffer playTimeMs:(double)playTimeMs {
+    AVAudioFrameCount frames = buffer.frameLength;
+    if (frames == 0 || self.streamInfo.sampleRate <= 0) {
+        return;
+    }
+
+    float *const *dst = buffer.floatChannelData;
+    NSUInteger channels = self.streamInfo.channels;
+    for (NSUInteger ch = 0; ch < channels; ch++) {
+        memset(dst[ch], 0, frames * sizeof(float));
+    }
+
+    double serverPlayTimeMs = [self.timeProvider serverTimeForLocalTimeMs:playTimeMs];
+
+    PCMChunk *chunk = nil;
+    @synchronized (self) {
+        if (!self.currentChunk) {
+            self.currentChunk = [self popChunkLocked];
+        }
+        chunk = self.currentChunk;
+    }
+
+    if (!chunk) {
+        return;
+    }
+
+    double reqChunkDuration = ((double)frames / self.streamInfo.sampleRate) * 1000.0;
+    double age = serverPlayTimeMs - [chunk startMs];
+
+    if (age < -reqChunkDuration) {
+        static CFAbsoluteTime lastYoungLog = 0;
+        CFAbsoluteTime nowTime = CFAbsoluteTimeGetCurrent();
+        if (nowTime - lastYoungLog >= 5.0) {
+            NSLog(@"AudioRenderer: chunk too young (age=%.2fms, req=%.2fms)", age, reqChunkDuration);
+            lastYoungLog = nowTime;
+        }
+        return;
+    }
+
+    NSInteger read = 0;
+    NSInteger pos = 0;
+
+    if (fabs(age) > 5.0) {
+        if (age > 0) {
+            @synchronized (self) {
+                while (self.currentChunk && age > [self.currentChunk durationMs]) {
+                    NSLog(@"AudioRenderer: drop chunk (age=%.2fms > %.2fms)",
+                          age, [self.currentChunk durationMs]);
+                    self.currentChunk = [self popChunkLocked];
+                    if (!self.currentChunk) {
+                        break;
+                    }
+                    age = serverPlayTimeMs - [self.currentChunk startMs];
+                }
+                chunk = self.currentChunk;
             }
         }
-        static CFAbsoluteTime lastLowWaterLog = 0;
-        BOOL shouldLog = NO;
-        double scheduled = 0.0;
-        @synchronized (strongSelf) {
-            scheduled = strongSelf.scheduledMs;
-            shouldLog = strongSelf.isPlaying && scheduled < strongSelf.lowWaterMs;
-        }
-        CFAbsoluteTime nowTime = CFAbsoluteTimeGetCurrent();
-        if (shouldLog && (nowTime - lastLowWaterLog >= 5.0)) {
-            NSLog(@"AudioRenderer: low queue %.0fms", scheduled);
-            lastLowWaterLog = nowTime;
-        }
-    };
 
-    if (machTime == 0 || isLate || isFarFuture) {
-        immediateCount += 1;
-        if (machTime == 0) {
-            zeroTimeCount += 1;
-        } else if (isLate) {
-            lateCount += 1;
-        } else {
-            farFutureCount += 1;
+        if (!chunk) {
+            return;
         }
+
+        if (age > 0) {
+            NSUInteger skipFrames = (NSUInteger)floor(age * chunk.sampleRate / 1000.0);
+            if (skipFrames > 0) {
+                chunk.idx = MIN(chunk.idx + skipFrames, chunk.frameCount);
+                NSLog(@"AudioRenderer: fast forward %.2fms (%lu frames)", age, (unsigned long)skipFrames);
+            }
+        } else if (age < 0) {
+            NSUInteger silentFrames = (NSUInteger)floor(-age * chunk.sampleRate / 1000.0);
+            if (silentFrames > frames) {
+                silentFrames = frames;
+            }
+            read = (NSInteger)silentFrames;
+            pos = (NSInteger)silentFrames;
+            NSLog(@"AudioRenderer: insert silence %.2fms (%lu frames)", -age, (unsigned long)silentFrames);
+        }
+        age = 0.0;
+    }
+
+    NSInteger addFrames = 0;
+    if (age > 0.1) {
+        addFrames = (NSInteger)ceil(age);
+    } else if (age < -0.1) {
+        addFrames = (NSInteger)floor(age);
+    }
+
+    NSInteger readFrames = (NSInteger)frames + addFrames - read;
+    if (readFrames < 0) {
+        readFrames = 0;
+    }
+
+    NSInteger everyN = 0;
+    if (addFrames != 0) {
+        NSInteger absAddFrames = (addFrames < 0) ? -addFrames : addFrames;
+        everyN = (NSInteger)ceil((double)(frames + addFrames - read) / ((double)absAddFrames + 1.0));
+    }
+
+    while (read < readFrames && chunk && pos < (NSInteger)frames) {
+        NSUInteger available = [chunk remainingFrames];
+        NSUInteger remaining = (NSUInteger)(readFrames - read);
+        NSUInteger framesToRead = MIN(available, remaining);
+
+        int16_t *src = (int16_t *)chunk.data.bytes;
+        NSUInteger framesRead = 0;
+        for (NSUInteger i = 0; i < framesToRead && pos < (NSInteger)frames; i++) {
+            NSUInteger srcIndex = (chunk.idx + i) * channels;
+            for (NSUInteger ch = 0; ch < channels; ch++) {
+                dst[ch][pos] = src[srcIndex + ch] / 32768.0f;
+            }
+
+            read++;
+            if (everyN != 0 && (read % everyN == 0)) {
+                if (addFrames > 0) {
+                    if (pos > 0) {
+                        pos--;
+                    }
+                } else if (pos + 1 < (NSInteger)frames) {
+                    for (NSUInteger ch = 0; ch < channels; ch++) {
+                        dst[ch][pos + 1] = dst[ch][pos];
+                    }
+                    pos++;
+                }
+            }
+            pos++;
+            framesRead++;
+        }
+
+        chunk.idx += framesRead;
+        if (chunk.idx >= chunk.frameCount) {
+            @synchronized (self) {
+                self.currentChunk = [self popChunkLocked];
+            }
+            chunk = self.currentChunk;
+        }
+    }
+
+    if (read < (NSInteger)frames) {
+        static CFAbsoluteTime lastEmptyLog = 0;
         CFAbsoluteTime nowTime = CFAbsoluteTimeGetCurrent();
-        if (nowTime - lastImmediateLog >= 5.0) {
-            NSLog(@"AudioRenderer: immediate schedule=%llu (late=%llu, future=%llu, zero=%llu), lastDiff=%.2fms",
-                  immediateCount, lateCount, farFutureCount, zeroTimeCount, diffMs);
-            lastImmediateLog = nowTime;
+        if (nowTime - lastEmptyLog >= 5.0) {
+            NSUInteger chunkCount = 0;
+            @synchronized (self) {
+                chunkCount = self.chunks.count;
+            }
+            NSLog(@"AudioRenderer: underrun (read=%ld/%u, chunks=%lu)",
+                  (long)read, (unsigned int)frames, (unsigned long)chunkCount);
+            lastEmptyLog = nowTime;
         }
-        [self.playerNode scheduleBuffer:buffer atTime:nil options:0 completionHandler:completionHandler];
-    } else {
-        AVAudioTime *audioTime = [[AVAudioTime alloc] initWithHostTime:machTime];
-        [self.playerNode scheduleBuffer:buffer atTime:audioTime options:0 completionHandler:completionHandler];
+    }
+}
+
+- (PCMChunk *)popChunkLocked {
+    if (self.chunks.count == 0) {
+        return nil;
+    }
+    PCMChunk *chunk = self.chunks.firstObject;
+    [self.chunks removeObjectAtIndex:0];
+    return chunk;
+}
+
+- (void)dropOldChunksLocked {
+    double serverNow = [self.timeProvider serverNowMs];
+    double maxAge = 5000.0 + self.playbackBufferMs;
+    while (self.chunks.count > 0) {
+        PCMChunk *first = self.chunks.firstObject;
+        double age = serverNow - first.timestampMs;
+        if (age <= maxAge) {
+            break;
+        }
+        NSLog(@"AudioRenderer: drop old chunk %.2fms (max=%.2fms)", age, maxAge);
+        [self.chunks removeObjectAtIndex:0];
     }
 }
 
