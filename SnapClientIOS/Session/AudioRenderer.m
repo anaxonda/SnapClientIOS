@@ -108,14 +108,24 @@
     
     // 3. Calculate Timestamp
     double serverTimeMs = (sec * 1000.0) + (usec / 1000.0);
-    double targetPlayTimeMs = serverTimeMs + (double)self.latencyMs;
+    double latencyMs = (double)self.latencyMs;
+    
+    // Total Target = ServerCaptureTime + Buffer + Latency - HardwareDelay
+    // Deduct 20ms for iPad DAC/Hardware buffer
+    double targetPlayTimeMs = serverTimeMs + latencyMs - 20.0;
     
     uint64_t machTime = [self.timeProvider machTimeForServerTimeMs:targetPlayTimeMs];
+    uint64_t now = mach_absolute_time();
     
-    if (chunkCount++ % 100 == 0) {
-        int64_t diffTicks = (int64_t)machTime - (int64_t)mach_absolute_time();
-        double diffMs = [self.timeProvider machToMs:diffTicks];
-        NSLog(@"AudioRenderer: Latency: %ldms, ChunkTime: %.0f, Diff: %.2fms", (long)self.latencyMs, serverTimeMs, diffMs);
+    // Safety check: if target is more than 500ms in the past, or uninitialized, play immediately
+    if (machTime < (now - [self.timeProvider msToMach:500.0]) || machTime == 0) {
+        NSLog(@"AudioRenderer: Schedule time too old or invalid, playing immediately");
+        [self.playerNode scheduleBuffer:buffer atTime:nil options:0 completionHandler:nil];
+    } else {
+        AVAudioTime *audioTime = [[AVAudioTime alloc] initWithHostTime:machTime];
+        [self.playerNode scheduleBuffer:buffer atTime:audioTime options:0 completionHandler:nil];
+    }
+}"AudioRenderer: Latency: %ldms, ChunkTime: %.0f, Diff: %.2fms", (long)self.latencyMs, serverTimeMs, diffMs);
     }
     
     AVAudioTime *audioTime = [[AVAudioTime alloc] initWithHostTime:machTime];
