@@ -30,13 +30,13 @@
 }
 
 - (double)machToMs:(uint64_t)machTime {
-    uint64_t nanos = machTime * self.timebaseInfo.numer / self.timebaseInfo.denom;
+    double nanos = (double)machTime * (double)self.timebaseInfo.numer / (double)self.timebaseInfo.denom;
     return nanos / 1000000.0;
 }
 
 - (uint64_t)msToMach:(double)ms {
     double nanos = ms * 1000000.0;
-    return (uint64_t)(nanos * self.timebaseInfo.denom / self.timebaseInfo.numer);
+    return (uint64_t)(nanos * (double)self.timebaseInfo.denom / (double)self.timebaseInfo.numer);
 }
 
 - (double)nowMs {

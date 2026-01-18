@@ -206,14 +206,27 @@ typedef enum : uint16_t {
 
 - (void)handleTimePayload:(NSData *)data {
     uint64_t pongRecvMach = mach_absolute_time();
-    double t2 = (_headerRecvSec * 1000.0) + (_headerRecvUsec / 1000.0);
-    double t3 = (_headerSentSec * 1000.0) + (_headerSentUsec / 1000.0);
     
-    [self.delegate socketHandler:self 
-          didReceiveTimeSyncServerRecv:t2 
-                            serverSent:t3 
-                            clientSent:_lastPingMach 
-                            clientRecv:pongRecvMach];
+    // Server System Clock (Unix) from Header
+    double serverSystemMs = (_headerSentSec * 1000.0) + (_headerSentUsec / 1000.0);
+    
+    // Server Monotonic Clock (Uptime) from Payload (if exists)
+    double serverMonotonicMs = 0;
+    if (data && data.length >= 8) {
+        int32_t mSec, mUsec;
+        [data getBytes:&mSec range:NSMakeRange(0, 4)];
+        [data getBytes:&mUsec range:NSMakeRange(4, 4)];
+        serverMonotonicMs = (CFSwapInt32LittleToHost(mSec) * 1000.0) + (CFSwapInt32LittleToHost(mUsec) / 1000.0);
+        NSLog(@"SocketHandler: TIME Payload Monotonic: %.2f", serverMonotonicMs);
+    }
+    
+    uint64_t rttMach = pongRecvMach - _lastPingMach;
+    uint64_t localMachAtServerSent = pongRecvMach - (rttMach / 2);
+    
+    // Use Monotonic if available (matches audio chunks), else System
+    double serverTimeMs = (serverMonotonicMs > 0) ? serverMonotonicMs : serverSystemMs;
+    
+    [self.delegate socketHandler:self didReceiveTimeSyncServerMs:serverTimeMs atLocalMach:localMachAtServerSent];
 }
 
 @end
