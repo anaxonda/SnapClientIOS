@@ -179,7 +179,7 @@ typedef enum : uint16_t {
         NSData *payload = [data subdataWithRange:NSMakeRange(12, payloadSize)];
         [self.delegate socketHandler:self didReceiveAudioData:payload serverSec:sec serverUsec:usec];
     } else if (tag == MESSAGE_TYPE_SERVER_SETTINGS) {
-        NSDictionary *json = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
+        NSDictionary *json = [self jsonDictionaryFromTypedMessage:data];
         if (json) [self.delegate socketHandler:self didReceiveServerSettings:json];
     } else if (tag == MESSAGE_TYPE_STREAM_TAGS) {
         NSDictionary *json = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
@@ -202,6 +202,36 @@ typedef enum : uint16_t {
     }
     
     [self readNextMessage:sock];
+}
+
+- (NSDictionary *)jsonDictionaryFromTypedMessage:(NSData *)data {
+    if (data.length == 0) {
+        return nil;
+    }
+
+    id obj = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
+    if ([obj isKindOfClass:[NSDictionary class]]) {
+        return obj;
+    }
+
+    if (data.length <= sizeof(uint32_t)) {
+        return nil;
+    }
+
+    uint32_t jsonSize = 0;
+    [data getBytes:&jsonSize length:sizeof(uint32_t)];
+    jsonSize = CFSwapInt32LittleToHost(jsonSize);
+    if (jsonSize == 0 || jsonSize > data.length - sizeof(uint32_t)) {
+        return nil;
+    }
+
+    NSData *jsonData = [data subdataWithRange:NSMakeRange(sizeof(uint32_t), jsonSize)];
+    obj = [NSJSONSerialization JSONObjectWithData:jsonData options:0 error:nil];
+    if ([obj isKindOfClass:[NSDictionary class]]) {
+        return obj;
+    }
+
+    return nil;
 }
 
 - (void)handleTimePayload:(NSData *)data {
