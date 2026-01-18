@@ -63,8 +63,16 @@
     NSError *error = nil;
     [session setCategory:AVAudioSessionCategoryPlayback error:&error];
     if (error) NSLog(@"Error setting category: %@", error);
+    if (self.streamInfo.sampleRate > 0) {
+        [session setPreferredSampleRate:self.streamInfo.sampleRate error:&error];
+        if (error) NSLog(@"Error setting preferred sample rate: %@", error);
+    }
+    [session setPreferredIOBufferDuration:0.04 error:&error];
+    if (error) NSLog(@"Error setting preferred IO buffer duration: %@", error);
     [session setActive:YES error:&error];
     if (error) NSLog(@"Error activating session: %@", error);
+    NSLog(@"AudioSession: sampleRate=%.0f, ioBuffer=%.3fms, outputLatency=%.3fms",
+          session.sampleRate, session.IOBufferDuration * 1000.0, session.outputLatency * 1000.0);
 
     self.engine = [[AVAudioEngine alloc] init];
     self.playerNode = [[AVAudioPlayerNode alloc] init];
