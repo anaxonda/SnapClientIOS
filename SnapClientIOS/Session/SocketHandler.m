@@ -21,9 +21,6 @@ typedef enum : uint16_t {
 
 @interface SocketHandler () <GCDAsyncSocketDelegate> {
     dispatch_queue_t queue;
-    dispatch_queue_t processingQueue;
-    NSMutableArray<NSDictionary *> *_pendingReads;
-    BOOL _processingRead;
     
     // Header parsing temp storage
     int32_t _headerSentSec;
@@ -50,13 +47,10 @@ typedef enum : uint16_t {
         self.serverHost = host;
         self.serverPort = port;
         _delegate = delegate;
-    _nextMessageId = 0;
-    
+        _nextMessageId = 0;
+        
         queue = dispatch_queue_create("ljk.snapclientios.socketqueue", NULL);
-        processingQueue = dispatch_queue_create("ljk.snapclientios.socketprocessing", NULL);
-        _pendingReads = [[NSMutableArray alloc] init];
-        _processingRead = NO;
-        self.socket = [[GCDAsyncSocket alloc] initWithDelegate:self delegateQueue:processingQueue];
+        self.socket = [[GCDAsyncSocket alloc] initWithDelegate:self delegateQueue:queue];
         [self.socket performBlock:^{
             [self.socket enableBackgroundingOnSocket];
         }];
@@ -104,7 +98,7 @@ typedef enum : uint16_t {
     [base appendData:helloData];
     
     [self.socket writeData:base withTimeout:-1 tag:MESSAGE_TYPE_HELLO];
-    [self readNextMessage];
+    [self readNextMessage:self.socket];
 }
 
 - (void)disconnect {
@@ -172,40 +166,12 @@ typedef enum : uint16_t {
     return base;
 }
 
-- (void)readNextMessage {
-    [self scheduleReadLength:26 tag:MESSAGE_TYPE_BASE];
-}
-
-- (void)scheduleReadLength:(NSUInteger)length tag:(long)tag {
-    dispatch_async(queue, ^{
-        [self.socket readDataToLength:length withTimeout:-1 tag:tag];
-    });
+- (void)readNextMessage:(GCDAsyncSocket *)socket {
+    [socket readDataToLength:26 withTimeout:-1 tag:MESSAGE_TYPE_BASE];
 }
 
 #pragma mark - GCDAsyncSocketDelegate
 - (void)socket:(GCDAsyncSocket *)sock didReadData:(NSData *)data withTag:(long)tag {
-    [self enqueueReadData:data tag:tag];
-}
-
-- (void)enqueueReadData:(NSData *)data tag:(long)tag {
-    if (_processingRead) {
-        [_pendingReads addObject:@{@"data": data, @"tag": @(tag)}];
-        return;
-    }
-
-    _processingRead = YES;
-    [self handleReadData:data tag:tag];
-    while (_pendingReads.count > 0) {
-        NSDictionary *entry = _pendingReads[0];
-        [_pendingReads removeObjectAtIndex:0];
-        NSData *nextData = entry[@"data"];
-        long nextTag = [entry[@"tag"] longValue];
-        [self handleReadData:nextData tag:nextTag];
-    }
-    _processingRead = NO;
-}
-
-- (void)handleReadData:(NSData *)data tag:(long)tag {
     if (tag == MESSAGE_TYPE_BASE) {
         uint16_t messageType;
         [data getBytes:&messageType length:sizeof(uint16_t)];
@@ -225,10 +191,10 @@ typedef enum : uint16_t {
         typedMessageLength = CFSwapInt32LittleToHost(typedMessageLength);
         
         if (typedMessageLength > 0) {
-            [self scheduleReadLength:typedMessageLength tag:messageType];
+            [sock readDataToLength:typedMessageLength withTimeout:-1 tag:messageType];
         } else {
             if (messageType == MESSAGE_TYPE_TIME) [self handleTimePayload:nil];
-            [self readNextMessage];
+            [self readNextMessage:sock];
         }
         return;
     }
@@ -284,7 +250,7 @@ typedef enum : uint16_t {
         [self handleTimePayload:data];
     }
     
-    [self readNextMessage];
+    [self readNextMessage:sock];
 }
 
 - (NSDictionary *)jsonDictionaryFromTypedMessage:(NSData *)data {
