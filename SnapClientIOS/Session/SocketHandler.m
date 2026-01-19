@@ -22,6 +22,8 @@ typedef enum : uint16_t {
 @interface SocketHandler () <GCDAsyncSocketDelegate> {
     dispatch_queue_t queue;
     dispatch_queue_t processingQueue;
+    NSMutableArray<NSDictionary *> *_pendingReads;
+    BOOL _processingRead;
     
     // Header parsing temp storage
     int32_t _headerSentSec;
@@ -52,6 +54,8 @@ typedef enum : uint16_t {
     
         queue = dispatch_queue_create("ljk.snapclientios.socketqueue", NULL);
         processingQueue = dispatch_queue_create("ljk.snapclientios.socketprocessing", NULL);
+        _pendingReads = [[NSMutableArray alloc] init];
+        _processingRead = NO;
         self.socket = [[GCDAsyncSocket alloc] initWithDelegate:self delegateQueue:processingQueue];
         [self.socket performBlock:^{
             [self.socket enableBackgroundingOnSocket];
@@ -180,9 +184,25 @@ typedef enum : uint16_t {
 
 #pragma mark - GCDAsyncSocketDelegate
 - (void)socket:(GCDAsyncSocket *)sock didReadData:(NSData *)data withTag:(long)tag {
-    dispatch_async(processingQueue, ^{
-        [self handleReadData:data tag:tag];
-    });
+    [self enqueueReadData:data tag:tag];
+}
+
+- (void)enqueueReadData:(NSData *)data tag:(long)tag {
+    if (_processingRead) {
+        [_pendingReads addObject:@{@"data": data, @"tag": @(tag)}];
+        return;
+    }
+
+    _processingRead = YES;
+    [self handleReadData:data tag:tag];
+    while (_pendingReads.count > 0) {
+        NSDictionary *entry = _pendingReads[0];
+        [_pendingReads removeObjectAtIndex:0];
+        NSData *nextData = entry[@"data"];
+        long nextTag = [entry[@"tag"] longValue];
+        [self handleReadData:nextData tag:nextTag];
+    }
+    _processingRead = NO;
 }
 
 - (void)handleReadData:(NSData *)data tag:(long)tag {
