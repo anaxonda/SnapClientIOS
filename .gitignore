@@ -27,7 +27,12 @@ profile
 *.moved-aside
 DerivedData
 *.hmap
-*.ipa
+*.ipa*
+
+# Local-only artifacts
+OTHER_CLIENTS/
+SideServer-for-Linux/
+FLACiOS.framework/
 
 # CocoaPods
-Pods
+Pods/
