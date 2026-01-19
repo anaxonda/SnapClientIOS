@@ -29,6 +29,7 @@ typedef enum : uint16_t {
     int32_t _headerRecvUsec;
     
     uint64_t _lastPingMach;
+    uint16_t _nextMessageId;
 }
 
 @property (nonatomic, copy) NSString *serverHost;
@@ -46,6 +47,7 @@ typedef enum : uint16_t {
         self.serverHost = host;
         self.serverPort = port;
         _delegate = delegate;
+        _nextMessageId = 0;
         
         queue = dispatch_queue_create("ljk.snapclientios.socketqueue", NULL);
         self.socket = [[GCDAsyncSocket alloc] initWithDelegate:self delegateQueue:queue];
@@ -131,16 +133,22 @@ typedef enum : uint16_t {
     return now * 1000.0;
 }
 
+- (uint16_t)lastSentMessageId {
+    return _nextMessageId;
+}
+
 - (NSMutableData *)baseMessageWithType:(uint16_t)type sentMs:(double)sentMs {
     NSMutableData *base = [[NSMutableData alloc] init];
     uint16_t leType = CFSwapInt16HostToLittle(type);
-    uint16_t idField = 0;
+    uint16_t idField = ++_nextMessageId;
     uint16_t refersToField = 0;
     int32_t zero = 0;
     
     [base appendBytes:&leType length:sizeof(uint16_t)];
-    [base appendBytes:&idField length:sizeof(uint16_t)];
-    [base appendBytes:&refersToField length:sizeof(uint16_t)];
+    uint16_t leIdField = CFSwapInt16HostToLittle(idField);
+    uint16_t leRefersToField = CFSwapInt16HostToLittle(refersToField);
+    [base appendBytes:&leIdField length:sizeof(uint16_t)];
+    [base appendBytes:&leRefersToField length:sizeof(uint16_t)];
     
     if (sentMs < 0.0) {
         sentMs = [self currentTimeMsForMessage];

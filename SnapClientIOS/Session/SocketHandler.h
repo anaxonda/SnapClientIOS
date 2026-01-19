@@ -26,6 +26,7 @@ NS_ASSUME_NONNULL_BEGIN
 
 @property (nonatomic, weak) id<SocketHandlerDelegate> delegate;
 @property (nonatomic, weak) TimeProvider *timeProvider;
+@property (nonatomic, assign, readonly) uint16_t lastSentMessageId;
 
 - (instancetype)initWithSnapServerHost:(NSString *)host port:(NSUInteger)port delegate:(id<SocketHandlerDelegate>)delegate;
 - (void)start;

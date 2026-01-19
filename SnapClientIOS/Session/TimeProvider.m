@@ -14,6 +14,7 @@
 @property (nonatomic, assign) double diff; // Offset: ServerMs - LocalMachMs
 @property (nonatomic, strong) NSMutableArray<NSNumber *> *diffBuffer;
 @property (nonatomic, assign) mach_timebase_info_data_t timebaseInfo;
+@property (nonatomic, assign) NSTimeInterval lastDiffUpdate;
 @end
 
 @implementation TimeProvider
@@ -23,6 +24,7 @@
     if (self) {
         _diff = 0;
         _diffBuffer = [NSMutableArray array];
+        _lastDiffUpdate = 0;
         mach_timebase_info(&_timebaseInfo);
     }
     return self;
@@ -67,10 +69,15 @@
 }
 
 - (void)updateOffsetWithDiff:(double)offset {
+    NSTimeInterval now = [NSDate date].timeIntervalSince1970;
+    if (self.lastDiffUpdate > 0 && (now - self.lastDiffUpdate) > 60.0) {
+        [self.diffBuffer removeAllObjects];
+    }
+    self.lastDiffUpdate = now;
     [self.diffBuffer addObject:@(offset)];
     
-    // Median Filter (Size 100)
-    if (self.diffBuffer.count > 100) {
+    // Median Filter (Size 200, snapclient parity)
+    if (self.diffBuffer.count > 200) {
         [self.diffBuffer removeObjectAtIndex:0];
     }
     

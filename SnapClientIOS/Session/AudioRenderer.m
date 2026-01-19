@@ -9,6 +9,7 @@
 @import AVFoundation;
 #include <mach/mach.h>
 #include <mach/mach_time.h>
+#include <math.h>
 
 @interface PCMChunk : NSObject
 
@@ -66,6 +67,54 @@
 
 @end
 
+@interface MedianBuffer : NSObject
+
+@property (nonatomic, assign) NSUInteger capacity;
+@property (nonatomic, strong) NSMutableArray<NSNumber *> *values;
+
+- (instancetype)initWithCapacity:(NSUInteger)capacity;
+- (void)addValue:(double)value;
+- (BOOL)isFull;
+- (double)median;
+- (void)clear;
+
+@end
+
+@implementation MedianBuffer
+
+- (instancetype)initWithCapacity:(NSUInteger)capacity {
+    if (self = [super init]) {
+        _capacity = capacity;
+        _values = [NSMutableArray arrayWithCapacity:capacity];
+    }
+    return self;
+}
+
+- (void)addValue:(double)value {
+    [self.values addObject:@(value)];
+    if (self.values.count > self.capacity) {
+        [self.values removeObjectAtIndex:0];
+    }
+}
+
+- (BOOL)isFull {
+    return self.values.count == self.capacity;
+}
+
+- (double)median {
+    if (self.values.count == 0) {
+        return 0.0;
+    }
+    NSArray<NSNumber *> *sorted = [self.values sortedArrayUsingSelector:@selector(compare:)];
+    return sorted[sorted.count / 2].doubleValue;
+}
+
+- (void)clear {
+    [self.values removeAllObjects];
+}
+
+@end
+
 @interface AudioRenderer ()
 
 @property (nonatomic, strong) StreamInfo *streamInfo;
@@ -83,6 +132,16 @@
 @property (nonatomic, assign) BOOL isMuted;
 @property (nonatomic, assign) double nextPlayTimeMs;
 @property (nonatomic, assign) BOOL isPlaying;
+@property (nonatomic, assign) BOOL hardSync;
+@property (nonatomic, assign) double medianAgeMs;
+@property (nonatomic, assign) double shortMedianAgeMs;
+@property (nonatomic, assign) int32_t correctAfterXFrames;
+@property (nonatomic, assign) uint32_t playedFrames;
+@property (nonatomic, strong) MedianBuffer *bufferMedian;
+@property (nonatomic, strong) MedianBuffer *shortBuffer;
+@property (nonatomic, strong) MedianBuffer *miniBuffer;
+@property (nonatomic, strong) NSMutableData *readBuffer;
+@property (nonatomic, strong) NSMutableData *correctedBuffer;
 @property (nonatomic, strong) NSMutableArray<PCMChunk *> *chunks;
 @property (nonatomic, strong) PCMChunk *currentChunk;
 
@@ -106,6 +165,16 @@
         self.currentChunk = nil;
         self.isPlaying = NO;
         self.nextPlayTimeMs = 0.0;
+        self.hardSync = YES;
+        self.medianAgeMs = 0.0;
+        self.shortMedianAgeMs = 0.0;
+        self.correctAfterXFrames = 0;
+        self.playedFrames = 0;
+        self.bufferMedian = [[MedianBuffer alloc] initWithCapacity:500];
+        self.shortBuffer = [[MedianBuffer alloc] initWithCapacity:100];
+        self.miniBuffer = [[MedianBuffer alloc] initWithCapacity:20];
+        self.readBuffer = [NSMutableData data];
+        self.correctedBuffer = [NSMutableData data];
         [self initAudioEngine];
     }
     return self;
@@ -234,12 +303,38 @@
     self.bufferFrameCount = (AVAudioFrameCount)frames;
 }
 
+- (void)resetSyncBuffers {
+    [self.bufferMedian clear];
+    [self.shortBuffer clear];
+    [self.miniBuffer clear];
+    self.medianAgeMs = 0.0;
+    self.shortMedianAgeMs = 0.0;
+}
+
+- (void)setRealSampleRate:(double)sampleRate {
+    double nominalRate = self.streamInfo.sampleRate;
+    if (nominalRate <= 0.0 || fabs(sampleRate - nominalRate) < 0.000001) {
+        self.correctAfterXFrames = 0;
+        return;
+    }
+    double ratio = nominalRate / sampleRate;
+    double denom = ratio - 1.0;
+    if (fabs(denom) < 0.000000001) {
+        self.correctAfterXFrames = 0;
+        return;
+    }
+    self.correctAfterXFrames = (int32_t)llround(ratio / denom);
+}
+
 - (void)startPlaybackIfNeeded {
     if (self.isPlaying || self.bufferFrameCount == 0) {
         return;
     }
     self.isPlaying = YES;
     self.nextPlayTimeMs = [self.timeProvider nowMs] + 100.0;
+    self.hardSync = YES;
+    self.playedFrames = 0;
+    [self resetSyncBuffers];
     for (NSInteger i = 0; i < self.audioBufferCount; i++) {
         [self scheduleNextBuffer];
     }
@@ -255,9 +350,10 @@
                                                              frameCapacity:self.bufferFrameCount];
     buffer.frameLength = self.bufferFrameCount;
 
+    double nowMs = [self.timeProvider nowMs];
     double hwLatencyMs = [AVAudioSession sharedInstance].outputLatency * 1000.0;
-    double playTimeMs = self.nextPlayTimeMs + hwLatencyMs - self.playbackBufferMs;
-    [self fillBuffer:buffer playTimeMs:playTimeMs];
+    double outputBufferDacTimeMs = (self.nextPlayTimeMs - nowMs) + hwLatencyMs;
+    [self fillBuffer:buffer outputBufferDacTimeMs:outputBufferDacTimeMs];
 
     uint64_t hostTime = [self.timeProvider msToMach:self.nextPlayTimeMs];
     uint64_t now = mach_absolute_time();
@@ -278,7 +374,7 @@
     self.nextPlayTimeMs += self.bufferDurationMs;
 }
 
-- (void)fillBuffer:(AVAudioPCMBuffer *)buffer playTimeMs:(double)playTimeMs {
+- (void)fillBuffer:(AVAudioPCMBuffer *)buffer outputBufferDacTimeMs:(double)outputBufferDacTimeMs {
     AVAudioFrameCount frames = buffer.frameLength;
     if (frames == 0 || self.streamInfo.sampleRate <= 0) {
         return;
@@ -290,7 +386,7 @@
         memset(dst[ch], 0, frames * sizeof(float));
     }
 
-    double serverPlayTimeMs = [self.timeProvider serverTimeForLocalTimeMs:playTimeMs];
+    double serverNowMs = [self.timeProvider serverNowMs];
 
     PCMChunk *chunk = nil;
     @synchronized (self) {
@@ -304,33 +400,22 @@
         return;
     }
 
-    double reqChunkDuration = ((double)frames / self.streamInfo.sampleRate) * 1000.0;
-    double age = serverPlayTimeMs - [chunk startMs];
+    double reqChunkDurationMs = ((double)frames / self.streamInfo.sampleRate) * 1000.0;
 
-    if (age < -reqChunkDuration) {
-        static CFAbsoluteTime lastYoungLog = 0;
-        CFAbsoluteTime nowTime = CFAbsoluteTimeGetCurrent();
-        if (nowTime - lastYoungLog >= 5.0) {
-            NSLog(@"AudioRenderer: chunk too young (age=%.2fms, req=%.2fms)", age, reqChunkDuration);
-            lastYoungLog = nowTime;
+    if (self.hardSync) {
+        double ageMs = serverNowMs - [chunk startMs] - self.playbackBufferMs + outputBufferDacTimeMs;
+        if (ageMs < -reqChunkDurationMs) {
+            return;
         }
-        return;
-    }
 
-    NSInteger read = 0;
-    NSInteger pos = 0;
-
-    if (fabs(age) > 5.0) {
-        if (age > 0) {
+        if (ageMs > 0.0) {
             @synchronized (self) {
-                while (self.currentChunk && age > [self.currentChunk durationMs]) {
-                    NSLog(@"AudioRenderer: drop chunk (age=%.2fms > %.2fms)",
-                          age, [self.currentChunk durationMs]);
+                while (self.currentChunk && ageMs > [self.currentChunk durationMs]) {
                     self.currentChunk = [self popChunkLocked];
                     if (!self.currentChunk) {
                         break;
                     }
-                    age = serverPlayTimeMs - [self.currentChunk startMs];
+                    ageMs = serverNowMs - [self.currentChunk startMs] - self.playbackBufferMs + outputBufferDacTimeMs;
                 }
                 chunk = self.currentChunk;
             }
@@ -340,73 +425,201 @@
             return;
         }
 
-        if (age > 0) {
-            NSUInteger skipFrames = (NSUInteger)floor(age * chunk.sampleRate / 1000.0);
+        if (ageMs > 0.0) {
+            NSUInteger skipFrames = (NSUInteger)floor(ageMs * chunk.sampleRate / 1000.0);
             if (skipFrames > 0) {
                 chunk.idx = MIN(chunk.idx + skipFrames, chunk.frameCount);
-                NSLog(@"AudioRenderer: fast forward %.2fms (%lu frames)", age, (unsigned long)skipFrames);
             }
-        } else if (age < 0) {
-            NSUInteger silentFrames = (NSUInteger)floor(-age * chunk.sampleRate / 1000.0);
+            ageMs = 0.0;
+        }
+
+        NSUInteger silentFrames = 0;
+        if (ageMs < 0.0) {
+            silentFrames = (NSUInteger)floor(-ageMs * self.streamInfo.sampleRate / 1000.0);
             if (silentFrames > frames) {
                 silentFrames = frames;
             }
-            read = (NSInteger)silentFrames;
-            pos = (NSInteger)silentFrames;
-            NSLog(@"AudioRenderer: insert silence %.2fms (%lu frames)", -age, (unsigned long)silentFrames);
         }
-        age = 0.0;
+
+        if (silentFrames < frames) {
+            double startMs = [self fillPCMDataIntoBuffer:buffer frames:(frames - silentFrames) framesCorrection:0 startOffset:silentFrames];
+            if (!isnan(startMs)) {
+                self.hardSync = NO;
+                [self resetSyncBuffers];
+            }
+        }
+        return;
     }
 
-    NSInteger addFrames = 0;
-    if (age > 0.1) {
-        addFrames = (NSInteger)ceil(age);
-    } else if (age < -0.1) {
-        addFrames = (NSInteger)floor(age);
+    int32_t framesCorrection = 0;
+    if (self.correctAfterXFrames != 0) {
+        self.playedFrames += frames;
+        uint32_t absCorrect = (uint32_t)abs(self.correctAfterXFrames);
+        if (self.playedFrames >= absCorrect) {
+            int32_t sign = (self.correctAfterXFrames < 0) ? -1 : 1;
+            framesCorrection = sign * (int32_t)(self.playedFrames / absCorrect);
+            self.playedFrames = self.playedFrames % absCorrect;
+        }
     }
 
-    NSInteger readFrames = (NSInteger)frames + addFrames - read;
-    if (readFrames < 0) {
-        readFrames = 0;
+    double startMs = [self fillPCMDataIntoBuffer:buffer frames:frames framesCorrection:framesCorrection startOffset:0];
+    if (isnan(startMs)) {
+        return;
     }
 
-    NSInteger everyN = 0;
-    if (addFrames != 0) {
-        NSInteger absAddFrames = (addFrames < 0) ? -addFrames : addFrames;
-        everyN = (NSInteger)ceil((double)(frames + addFrames - read) / ((double)absAddFrames + 1.0));
+    double ageMs = serverNowMs - startMs - self.playbackBufferMs + outputBufferDacTimeMs;
+    [self.bufferMedian addValue:ageMs];
+    [self.shortBuffer addValue:ageMs];
+    [self.miniBuffer addValue:ageMs];
+    self.medianAgeMs = [self.bufferMedian median];
+    self.shortMedianAgeMs = [self.shortBuffer median];
+    double miniMedian = [self.miniBuffer median];
+
+    if ([self.bufferMedian isFull] && fabs(self.medianAgeMs) > 2.0 && fabs(ageMs) > 0.5) {
+        self.hardSync = YES;
+    } else if ([self.shortBuffer isFull] && fabs(self.shortMedianAgeMs) > 5.0 && fabs(ageMs) > 0.5) {
+        self.hardSync = YES;
+    } else if ([self.miniBuffer isFull] && fabs(miniMedian) > 50.0 && fabs(ageMs) > 0.5) {
+        self.hardSync = YES;
+    } else if (fabs(ageMs) > 500.0) {
+        self.hardSync = YES;
+    } else if ([self.shortBuffer isFull]) {
+        if (self.shortMedianAgeMs > 0.1 && miniMedian > 0.05 && ageMs > 0.05) {
+            double rate = (self.shortMedianAgeMs / 100.0) * 0.00005;
+            rate = 1.0 - MIN(rate, 0.0005);
+            [self setRealSampleRate:self.streamInfo.sampleRate * rate];
+        } else if (self.shortMedianAgeMs < -0.1 && miniMedian < -0.05 && ageMs < -0.05) {
+            double rate = (self.shortMedianAgeMs / 100.0) * 0.00005;
+            rate = 1.0 - MAX(rate, -0.0005);
+            [self setRealSampleRate:self.streamInfo.sampleRate * rate];
+        } else {
+            [self setRealSampleRate:self.streamInfo.sampleRate];
+        }
+    }
+}
+
+- (double)fillPCMDataIntoBuffer:(AVAudioPCMBuffer *)buffer
+                         frames:(AVAudioFrameCount)frames
+               framesCorrection:(int32_t)framesCorrection
+                    startOffset:(NSUInteger)startOffset {
+    if (frames == 0 || self.streamInfo.sampleRate <= 0) {
+        return NAN;
     }
 
-    while (read < readFrames && chunk && pos < (NSInteger)frames) {
+    if (framesCorrection < 0 && ((int32_t)frames + framesCorrection <= 0)) {
+        framesCorrection = -((int32_t)frames) + 1;
+    }
+
+    int32_t toReadFrames = (int32_t)frames + framesCorrection;
+    if (toReadFrames < 1) {
+        toReadFrames = 1;
+    }
+
+    NSUInteger channels = self.streamInfo.channels;
+    NSUInteger readSamples = (NSUInteger)toReadFrames * channels;
+    [self.readBuffer setLength:readSamples * sizeof(int16_t)];
+    memset(self.readBuffer.mutableBytes, 0, self.readBuffer.length);
+
+    NSUInteger framesRead = 0;
+    double startMs = [self readFramesIntoBuffer:(int16_t *)self.readBuffer.mutableBytes
+                                         frames:(NSUInteger)toReadFrames
+                                     framesRead:&framesRead];
+    if (isnan(startMs)) {
+        return NAN;
+    }
+
+    NSUInteger outSamples = (NSUInteger)frames * channels;
+    [self.correctedBuffer setLength:outSamples * sizeof(int16_t)];
+    int16_t *readData = (int16_t *)self.readBuffer.mutableBytes;
+    int16_t *outData = (int16_t *)self.correctedBuffer.mutableBytes;
+
+    if (framesCorrection == 0) {
+        memcpy(outData, readData, outSamples * sizeof(int16_t));
+    } else {
+        NSUInteger max = (framesCorrection < 0) ? (NSUInteger)frames : (NSUInteger)toReadFrames;
+        NSUInteger slices = (NSUInteger)abs(framesCorrection) + 1;
+        if (slices > max) {
+            slices = max;
+        }
+        NSUInteger size = max / slices;
+        NSUInteger pos = 0;
+        for (NSUInteger n = 0; n < slices; n++) {
+            if (n + 1 == slices) {
+                size = max - pos;
+            }
+            NSUInteger srcIndex = 0;
+            NSUInteger dstIndex = 0;
+            if (framesCorrection < 0) {
+                srcIndex = pos - n;
+                dstIndex = pos;
+            } else {
+                srcIndex = pos;
+                dstIndex = pos - n;
+            }
+            memcpy(outData + (dstIndex * channels),
+                   readData + (srcIndex * channels),
+                   size * channels * sizeof(int16_t));
+            pos += size;
+        }
+    }
+
+    float *const *dst = buffer.floatChannelData;
+    NSUInteger maxFrames = MIN((NSUInteger)frames, buffer.frameLength - startOffset);
+    for (NSUInteger i = 0; i < maxFrames; i++) {
+        NSUInteger srcIndex = i * channels;
+        NSUInteger dstIndex = startOffset + i;
+        for (NSUInteger ch = 0; ch < channels; ch++) {
+            dst[ch][dstIndex] = outData[srcIndex + ch] / 32768.0f;
+        }
+    }
+
+    NSUInteger expectedFrames = (NSUInteger)toReadFrames;
+    if (framesRead < expectedFrames) {
+        static CFAbsoluteTime lastEmptyLog = 0;
+        CFAbsoluteTime nowTime = CFAbsoluteTimeGetCurrent();
+        if (nowTime - lastEmptyLog >= 5.0) {
+            NSUInteger chunkCount = 0;
+            @synchronized (self) {
+                chunkCount = self.chunks.count;
+            }
+            NSLog(@"AudioRenderer: underrun (read=%lu/%u, chunks=%lu)",
+                  (unsigned long)framesRead, (unsigned int)expectedFrames, (unsigned long)chunkCount);
+            lastEmptyLog = nowTime;
+        }
+    }
+
+    return startMs;
+}
+
+- (double)readFramesIntoBuffer:(int16_t *)dest
+                        frames:(NSUInteger)frames
+                    framesRead:(NSUInteger *)framesRead {
+    if (framesRead) {
+        *framesRead = 0;
+    }
+    PCMChunk *chunk = nil;
+    @synchronized (self) {
+        if (!self.currentChunk) {
+            self.currentChunk = [self popChunkLocked];
+        }
+        chunk = self.currentChunk;
+    }
+    if (!chunk) {
+        return NAN;
+    }
+
+    double startMs = [chunk startMs];
+    NSUInteger channels = self.streamInfo.channels;
+    NSUInteger read = 0;
+    while (read < frames && chunk) {
         NSUInteger available = [chunk remainingFrames];
-        NSUInteger remaining = (NSUInteger)(readFrames - read);
-        NSUInteger framesToRead = MIN(available, remaining);
-
+        NSUInteger framesToRead = MIN(available, frames - read);
         int16_t *src = (int16_t *)chunk.data.bytes;
-        NSUInteger framesRead = 0;
-        for (NSUInteger i = 0; i < framesToRead && pos < (NSInteger)frames; i++) {
-            NSUInteger srcIndex = (chunk.idx + i) * channels;
-            for (NSUInteger ch = 0; ch < channels; ch++) {
-                dst[ch][pos] = src[srcIndex + ch] / 32768.0f;
-            }
-
-            read++;
-            if (everyN != 0 && (read % everyN == 0)) {
-                if (addFrames > 0) {
-                    if (pos > 0) {
-                        pos--;
-                    }
-                } else if (pos + 1 < (NSInteger)frames) {
-                    for (NSUInteger ch = 0; ch < channels; ch++) {
-                        dst[ch][pos + 1] = dst[ch][pos];
-                    }
-                    pos++;
-                }
-            }
-            pos++;
-            framesRead++;
-        }
-
-        chunk.idx += framesRead;
+        memcpy(dest + (read * channels),
+               src + (chunk.idx * channels),
+               framesToRead * channels * sizeof(int16_t));
+        read += framesToRead;
+        chunk.idx += framesToRead;
         if (chunk.idx >= chunk.frameCount) {
             @synchronized (self) {
                 self.currentChunk = [self popChunkLocked];
@@ -415,19 +628,13 @@
         }
     }
 
-    if (read < (NSInteger)frames) {
-        static CFAbsoluteTime lastEmptyLog = 0;
-        CFAbsoluteTime nowTime = CFAbsoluteTimeGetCurrent();
-        if (nowTime - lastEmptyLog >= 5.0) {
-            NSUInteger chunkCount = 0;
-            @synchronized (self) {
-                chunkCount = self.chunks.count;
-            }
-            NSLog(@"AudioRenderer: underrun (read=%ld/%u, chunks=%lu)",
-                  (long)read, (unsigned int)frames, (unsigned long)chunkCount);
-            lastEmptyLog = nowTime;
-        }
+    if (framesRead) {
+        *framesRead = read;
     }
+    if (read < frames) {
+        memset(dest + (read * channels), 0, (frames - read) * channels * sizeof(int16_t));
+    }
+    return startMs;
 }
 
 - (PCMChunk *)popChunkLocked {

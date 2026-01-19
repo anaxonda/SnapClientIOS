@@ -15,6 +15,12 @@ Changes applied in this session:
 Outcome:
 - Timing now matches snapweb, and stutter frequency is reduced on device.
 
+Baseline commit (good audio output):
+- Commit: `4fd634a` (includes header parsing fix `8fa7189`).
+- Uses monotonic `mach_absolute_time` for time sync and scheduling (no audio-clock switching).
+- TIME sync uses payload latency with diff = (c2s - s2c) / 2, plus a quick-sync burst (50 pings at 100ms).
+- Audio output is stable in recent testing; timing aligns with other clients.
+
 Possible future refinements (if timing or stability regresses):
 - Align TIME message handling with reference clients (latency payload + header field ordering) for tighter clock sync.
 - Reconcile buffer/latency math with snapweb/snapclient (`bufferMs = serverBufferMs - clientLatency`) and local audio latency handling.

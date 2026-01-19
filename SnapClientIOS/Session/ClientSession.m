@@ -21,6 +21,7 @@
 @property (strong, nonatomic) AudioRenderer *audioRenderer;
 @property (strong, nonatomic) TimeProvider *timeProvider;
 @property (strong, nonatomic) NSTimer *syncTimer;
+@property (strong, nonatomic) dispatch_source_t quickSyncTimer;
 
 @property (assign, nonatomic) NSInteger cachedBufferMs;
 @property (assign, nonatomic) NSInteger cachedLatency;
@@ -54,7 +55,7 @@
 
 - (void)start {
     self.quickSyncRemaining = 50;
-    [self startSyncTimerWithInterval:0.1];
+    [self startQuickSyncTimer];
     [self.rpcHandler connect];
     [MPNowPlayingInfoCenter defaultCenter].nowPlayingInfo = @{MPMediaItemPropertyTitle: @"Snapcast"};
 }
@@ -64,8 +65,29 @@
     if (self.quickSyncRemaining > 0) {
         self.quickSyncRemaining--;
         if (self.quickSyncRemaining == 0) {
+            [self stopQuickSyncTimer];
             [self startSyncTimerWithInterval:1.0];
         }
+    }
+}
+
+- (void)startQuickSyncTimer {
+    [self stopQuickSyncTimer];
+    dispatch_queue_t queue = dispatch_get_main_queue();
+    self.quickSyncTimer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, queue);
+    uint64_t intervalNs = (uint64_t)(0.02 * NSEC_PER_SEC);
+    dispatch_source_set_timer(self.quickSyncTimer, dispatch_time(DISPATCH_TIME_NOW, 0), intervalNs, intervalNs / 2);
+    __weak typeof(self) weakSelf = self;
+    dispatch_source_set_event_handler(self.quickSyncTimer, ^{
+        [weakSelf sendSync];
+    });
+    dispatch_resume(self.quickSyncTimer);
+}
+
+- (void)stopQuickSyncTimer {
+    if (self.quickSyncTimer) {
+        dispatch_source_cancel(self.quickSyncTimer);
+        self.quickSyncTimer = nil;
     }
 }
 
@@ -84,6 +106,7 @@
 
 - (void)dealloc {
     [self.syncTimer invalidate];
+    [self stopQuickSyncTimer];
 }
 
 #pragma mark - SocketHandlerDelegate
