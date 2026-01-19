@@ -387,7 +387,7 @@
     double hwLatencyMs = [AVAudioSession sharedInstance].outputLatency * 1000.0;
     double sampleRate = self.streamInfo.sampleRate;
     if (sampleRate <= 0.0) {
-        return (self.nextPlayTimeMs - nowMs) + self.localPlayerLatencyMs + hwLatencyMs + 15.0;
+        return (self.nextPlayTimeMs - nowMs) + hwLatencyMs + 15.0;
     }
 
     double currentSampleTime = 0.0;
@@ -402,10 +402,10 @@
             queueFrames = 0.0;
         }
         double queueMs = (queueFrames / sampleRate) * 1000.0;
-        return queueMs + self.localPlayerLatencyMs + hwLatencyMs + 15.0;
+        return queueMs + hwLatencyMs + 15.0;
     }
 
-    return (self.nextPlayTimeMs - nowMs) + self.localPlayerLatencyMs + hwLatencyMs + 15.0;
+    return (self.nextPlayTimeMs - nowMs) + hwLatencyMs + 15.0;
 }
 
 - (BOOL)getCurrentSampleTime:(double *)sampleTime {
