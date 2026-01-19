@@ -98,7 +98,7 @@ typedef enum : uint16_t {
     [base appendData:helloData];
     
     [self.socket writeData:base withTimeout:-1 tag:MESSAGE_TYPE_HELLO];
-    [self readNextMessage:self.socket];
+    [self readNextMessage];
 }
 
 - (void)disconnect {
@@ -166,8 +166,14 @@ typedef enum : uint16_t {
     return base;
 }
 
-- (void)readNextMessage:(GCDAsyncSocket *)socket {
-    [socket readDataToLength:26 withTimeout:-1 tag:MESSAGE_TYPE_BASE];
+- (void)readNextMessage {
+    [self scheduleReadLength:26 tag:MESSAGE_TYPE_BASE];
+}
+
+- (void)scheduleReadLength:(NSUInteger)length tag:(long)tag {
+    dispatch_async(queue, ^{
+        [self.socket readDataToLength:length withTimeout:-1 tag:tag];
+    });
 }
 
 #pragma mark - GCDAsyncSocketDelegate
@@ -191,10 +197,10 @@ typedef enum : uint16_t {
         typedMessageLength = CFSwapInt32LittleToHost(typedMessageLength);
         
         if (typedMessageLength > 0) {
-            [sock readDataToLength:typedMessageLength withTimeout:-1 tag:messageType];
+            [self scheduleReadLength:typedMessageLength tag:messageType];
         } else {
             if (messageType == MESSAGE_TYPE_TIME) [self handleTimePayload:nil];
-            [self readNextMessage:sock];
+            [self readNextMessage];
         }
         return;
     }
@@ -250,7 +256,7 @@ typedef enum : uint16_t {
         [self handleTimePayload:data];
     }
     
-    [self readNextMessage:sock];
+    [self readNextMessage];
 }
 
 - (NSDictionary *)jsonDictionaryFromTypedMessage:(NSData *)data {
