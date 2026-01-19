@@ -69,6 +69,10 @@
     self.audioClockBlock = block;
 }
 
+- (BOOL)isAudioClockAvailable {
+    return self.hasAudioClock;
+}
+
 - (uint64_t)hostTimeForAudioTimeMs:(double)audioTimeMs {
     if (self.audioClockBlock) {
         double audioNowMs = 0.0;

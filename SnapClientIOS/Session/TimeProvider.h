@@ -30,6 +30,9 @@ typedef BOOL (^TimeProviderAudioClockBlock)(double *audioNowMs, uint64_t *hostTi
 // Converts an audio-clock timestamp to host time for scheduling.
 - (uint64_t)hostTimeForAudioTimeMs:(double)audioTimeMs;
 
+// Returns whether the audio clock source is currently available.
+- (BOOL)isAudioClockAvailable;
+
 /// Updates the time offset.
 /// @param serverTimeMs The server time in milliseconds.
 /// @param localTimeMs The local mach time in milliseconds when the server time was valid.

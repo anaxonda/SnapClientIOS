@@ -83,6 +83,7 @@
 @property (nonatomic, assign) BOOL isMuted;
 @property (nonatomic, assign) double nextPlayTimeMs;
 @property (nonatomic, assign) BOOL isPlaying;
+@property (nonatomic, assign) BOOL usingAudioClock;
 @property (nonatomic, strong) NSMutableArray<PCMChunk *> *chunks;
 @property (nonatomic, strong) PCMChunk *currentChunk;
 
@@ -106,6 +107,7 @@
         self.currentChunk = nil;
         self.isPlaying = NO;
         self.nextPlayTimeMs = 0.0;
+        self.usingAudioClock = NO;
         [self initAudioEngine];
     }
     return self;
@@ -183,7 +185,7 @@
             return NO;
         }
         double audioMs = ((double)playerTime.sampleTime / playerTime.sampleRate) * 1000.0;
-        if (audioMs <= 0.0) {
+        if (audioMs < 0.0) {
             return NO;
         }
         if (audioNowMs) {
@@ -266,7 +268,9 @@
         return;
     }
     self.isPlaying = YES;
-    self.nextPlayTimeMs = [self.timeProvider nowMs] + 100.0;
+    double nowMs = [self.timeProvider nowMs];
+    self.usingAudioClock = [self.timeProvider isAudioClockAvailable];
+    self.nextPlayTimeMs = nowMs + 100.0;
     for (NSInteger i = 0; i < self.audioBufferCount; i++) {
         [self scheduleNextBuffer];
     }
@@ -282,11 +286,19 @@
                                                              frameCapacity:self.bufferFrameCount];
     buffer.frameLength = self.bufferFrameCount;
 
+    double nowMs = [self.timeProvider nowMs];
+    if (!self.usingAudioClock && [self.timeProvider isAudioClockAvailable]) {
+        self.usingAudioClock = YES;
+        self.nextPlayTimeMs = nowMs + 100.0;
+    }
+
     double hwLatencyMs = [AVAudioSession sharedInstance].outputLatency * 1000.0;
     double playTimeMs = self.nextPlayTimeMs + hwLatencyMs - self.playbackBufferMs;
     [self fillBuffer:buffer playTimeMs:playTimeMs];
 
-    uint64_t hostTime = [self.timeProvider hostTimeForAudioTimeMs:self.nextPlayTimeMs];
+    uint64_t hostTime = self.usingAudioClock
+        ? [self.timeProvider hostTimeForAudioTimeMs:self.nextPlayTimeMs]
+        : [self.timeProvider msToMach:self.nextPlayTimeMs];
     uint64_t now = mach_absolute_time();
     AVAudioTime *audioTime = nil;
     if (hostTime > now) {
