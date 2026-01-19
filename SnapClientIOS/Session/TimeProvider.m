@@ -14,9 +14,6 @@
 @property (nonatomic, assign) double diff; // Offset: ServerMs - LocalMachMs
 @property (nonatomic, strong) NSMutableArray<NSNumber *> *diffBuffer;
 @property (nonatomic, assign) mach_timebase_info_data_t timebaseInfo;
-@property (nonatomic, copy) TimeProviderAudioClockBlock audioClockBlock;
-@property (nonatomic, assign) BOOL hasAudioClock;
-
 @end
 
 @implementation TimeProvider
@@ -42,18 +39,6 @@
 }
 
 - (double)nowMs {
-    if (self.audioClockBlock) {
-        double audioNowMs = 0.0;
-        uint64_t hostTime = 0;
-        if (self.audioClockBlock(&audioNowMs, &hostTime)) {
-            if (!self.hasAudioClock) {
-                self.hasAudioClock = YES;
-                [self reset];
-            }
-            return audioNowMs;
-        }
-    }
-    self.hasAudioClock = NO;
     return [self machToMs:mach_absolute_time()];
 }
 
@@ -65,31 +50,10 @@
     return localTimeMs + self.diff;
 }
 
-- (void)setAudioClockBlock:(TimeProviderAudioClockBlock)block {
-    self.audioClockBlock = block;
-}
-
-- (BOOL)isAudioClockAvailable {
-    return self.hasAudioClock;
-}
-
-- (uint64_t)hostTimeForAudioTimeMs:(double)audioTimeMs {
-    if (self.audioClockBlock) {
-        double audioNowMs = 0.0;
-        uint64_t hostTime = 0;
-        if (self.audioClockBlock(&audioNowMs, &hostTime)) {
-            double hostNowMs = [self machToMs:hostTime];
-            double offsetMs = hostNowMs - audioNowMs;
-            return [self msToMach:(audioTimeMs + offsetMs)];
-        }
-    }
-    return [self msToMach:audioTimeMs];
-}
-
 - (uint64_t)machTimeForServerTimeMs:(double)serverTimeMs {
     // LocalMachMs = ServerTimeMs - Diff
     double targetLocalMs = serverTimeMs - self.diff;
-    return [self hostTimeForAudioTimeMs:targetLocalMs];
+    return [self msToMach:targetLocalMs];
 }
 
 - (void)updateOffsetWithServerTime:(double)serverTimeMs localTime:(double)localTimeMs {

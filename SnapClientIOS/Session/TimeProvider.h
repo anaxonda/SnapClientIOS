@@ -9,8 +9,6 @@
 
 NS_ASSUME_NONNULL_BEGIN
 
-typedef BOOL (^TimeProviderAudioClockBlock)(double *audioNowMs, uint64_t *hostTime);
-
 @interface TimeProvider : NSObject
 
 // Returns the current local mach_absolute_time converted to milliseconds
@@ -23,15 +21,6 @@ typedef BOOL (^TimeProviderAudioClockBlock)(double *audioNowMs, uint64_t *hostTi
 - (double)serverNowMs;
 // Returns the calculated server time for a given local mach time in milliseconds
 - (double)serverTimeForLocalTimeMs:(double)localTimeMs;
-
-// Provide an audio clock source (audio time + host time).
-- (void)setAudioClockBlock:(TimeProviderAudioClockBlock)block;
-
-// Converts an audio-clock timestamp to host time for scheduling.
-- (uint64_t)hostTimeForAudioTimeMs:(double)audioTimeMs;
-
-// Returns whether the audio clock source is currently available.
-- (BOOL)isAudioClockAvailable;
 
 // Updates the time offset directly using a computed offset (server - local).
 - (void)updateOffsetWithDiff:(double)offset;

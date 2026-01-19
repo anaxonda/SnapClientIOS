@@ -24,6 +24,7 @@
 
 @property (assign, nonatomic) NSInteger cachedBufferMs;
 @property (assign, nonatomic) NSInteger cachedLatency;
+@property (assign, nonatomic) NSInteger quickSyncRemaining;
 
 @end
 
@@ -52,13 +53,29 @@
 }
 
 - (void)start {
-    self.syncTimer = [NSTimer scheduledTimerWithTimeInterval:1.0 target:self selector:@selector(sendSync) userInfo:nil repeats:YES];
+    self.quickSyncRemaining = 50;
+    [self startSyncTimerWithInterval:0.1];
     [self.rpcHandler connect];
     [MPNowPlayingInfoCenter defaultCenter].nowPlayingInfo = @{MPMediaItemPropertyTitle: @"Snapcast"};
 }
 
 - (void)sendSync {
     [self.socketHandler sendTime];
+    if (self.quickSyncRemaining > 0) {
+        self.quickSyncRemaining--;
+        if (self.quickSyncRemaining == 0) {
+            [self startSyncTimerWithInterval:1.0];
+        }
+    }
+}
+
+- (void)startSyncTimerWithInterval:(NSTimeInterval)interval {
+    [self.syncTimer invalidate];
+    self.syncTimer = [NSTimer scheduledTimerWithTimeInterval:interval
+                                                      target:self
+                                                    selector:@selector(sendSync)
+                                                    userInfo:nil
+                                                     repeats:YES];
 }
 
 - (void)setStreamId:(NSString *)streamId forGroupId:(NSString *)groupId {
