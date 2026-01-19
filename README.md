@@ -1,7 +1,10 @@
 # SnapClientIOS
-An iOS client for the excellent [Snapcast](https://github.com/badaix/snapcast), a multiroom client-server audio player. I initially wanted to port the C++ client bits from the original Snapcast code, but I could not get Boost to build in Xcode, so I decided on a clean Objective-C reimplementation instead. Hobby project, right?
+An iOS client for [Snapcast](https://github.com/badaix/snapcast), based on [SnapClientIOS](https://github.com/leejunkit/SnapClientIOS) by @leejunkit but heavily modified.
 
-Currently a very early work in progress. Streaming works with the FLAC audio codec, and synchronization is implemented but still being tuned.
+Rudimentary but basic functionality seems to be working well, synced with other clients, able to enter snapserver address and select desired audio stream.
+
+<img src="Screenshot_20260118_155731.png" width="45%" />
+
 
 ## Timing Fix Notes (Current State)
 At the start of this work the client played several seconds ahead of snapweb/other clients. The main root cause was incorrect parsing of SERVER_SETTINGS: the Snapstream payload is a 4-byte length-prefixed JSON blob, but the app attempted to decode the raw payload directly. That failed and left `bufferMs` at its default (1000ms), so playback was scheduled too early when the server buffer was larger (e.g., 3000ms).
