@@ -32,7 +32,6 @@ DerivedData
 # Local-only artifacts
 OTHER_CLIENTS/
 SideServer-for-Linux/
-FLACiOS.framework/
 
 # CocoaPods
 Pods/
