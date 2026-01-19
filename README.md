@@ -3,7 +3,7 @@ An iOS client for [Snapcast](https://github.com/badaix/snapcast), based on [Snap
 
 Rudimentary but basic functionality seems to be working well, synced with other clients, able to enter snapserver address and select desired audio stream.
 
-<img src="Screenshot_20260118_155731.png" width="45%" />
+<img src="Screenshot_20260119_160159.png" width="45%" />
 
 
 ## Timing Fix Notes (Current State)
