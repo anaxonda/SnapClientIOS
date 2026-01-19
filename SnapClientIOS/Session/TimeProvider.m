@@ -15,6 +15,7 @@
 @property (nonatomic, strong) NSMutableArray<NSNumber *> *diffBuffer;
 @property (nonatomic, assign) mach_timebase_info_data_t timebaseInfo;
 @property (nonatomic, assign) NSTimeInterval lastDiffUpdate;
+@property (atomic, assign) BOOL synced;
 @end
 
 @implementation TimeProvider
@@ -25,6 +26,7 @@
         _diff = 0;
         _diffBuffer = [NSMutableArray array];
         _lastDiffUpdate = 0;
+        _synced = NO;
         mach_timebase_info(&_timebaseInfo);
     }
     return self;
@@ -88,11 +90,17 @@
         self.diff = [[sorted objectAtIndex:idx] doubleValue];
         // NSLog(@"Time Sync: Offset %.2f ms", self.diff);
     }
+    self.synced = self.diffBuffer.count >= 3;
+}
+
+- (BOOL)hasSync {
+    return self.synced;
 }
 
 - (void)reset {
     [self.diffBuffer removeAllObjects];
     self.diff = 0;
+    self.synced = NO;
 }
 
 @end

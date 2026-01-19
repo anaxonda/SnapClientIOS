@@ -379,6 +379,9 @@
     if (self.isPlaying || self.bufferFrameCount == 0) {
         return;
     }
+    if (![self.timeProvider hasSync]) {
+        return;
+    }
     self.isPlaying = YES;
     self.nextPlayTimeMs = [self.timeProvider nowMs] + 100.0;
     self.nextPlaySampleTime = 0.0;

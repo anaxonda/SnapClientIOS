@@ -33,6 +33,8 @@ NS_ASSUME_NONNULL_BEGIN
 /// Converts a server timestamp (milliseconds) to local mach_absolute_time units
 - (uint64_t)machTimeForServerTimeMs:(double)serverTimeMs;
 
+- (BOOL)hasSync;
+
 - (void)reset;
 
 @end
