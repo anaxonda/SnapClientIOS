@@ -21,6 +21,7 @@ typedef enum : uint16_t {
 
 @interface SocketHandler () <GCDAsyncSocketDelegate> {
     dispatch_queue_t queue;
+    dispatch_queue_t processingQueue;
     
     // Header parsing temp storage
     int32_t _headerSentSec;
@@ -47,10 +48,11 @@ typedef enum : uint16_t {
         self.serverHost = host;
         self.serverPort = port;
         _delegate = delegate;
-        _nextMessageId = 0;
-        
-        queue = dispatch_queue_create("ljk.snapclientios.socketqueue", NULL);
-        self.socket = [[GCDAsyncSocket alloc] initWithDelegate:self delegateQueue:queue];
+    _nextMessageId = 0;
+    
+    queue = dispatch_queue_create("ljk.snapclientios.socketqueue", NULL);
+    processingQueue = dispatch_queue_create("ljk.snapclientios.socketprocessing", NULL);
+    self.socket = [[GCDAsyncSocket alloc] initWithDelegate:self delegateQueue:queue];
         [self.socket performBlock:^{
             [self.socket enableBackgroundingOnSocket];
         }];
@@ -178,6 +180,12 @@ typedef enum : uint16_t {
 
 #pragma mark - GCDAsyncSocketDelegate
 - (void)socket:(GCDAsyncSocket *)sock didReadData:(NSData *)data withTag:(long)tag {
+    dispatch_async(processingQueue, ^{
+        [self handleReadData:data tag:tag];
+    });
+}
+
+- (void)handleReadData:(NSData *)data tag:(long)tag {
     if (tag == MESSAGE_TYPE_BASE) {
         uint16_t messageType;
         [data getBytes:&messageType length:sizeof(uint16_t)];
