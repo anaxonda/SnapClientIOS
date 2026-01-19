@@ -282,24 +282,32 @@ typedef enum : uint16_t {
     // This is the reference used by audio chunks.
     double serverSystemMs = (_headerSentSec * 1000.0) + (_headerSentUsec / 1000.0);
     
-    uint64_t rttMach = pongRecvMach - _lastPingMach;
-
-    double rttMs = 0.0;
-    double localNowMs = 0.0;
-    if (self.timeProvider) {
-        rttMs = [self.timeProvider machToMs:rttMach];
-        localNowMs = [self.timeProvider nowMs];
+    if (!self.timeProvider) {
+        return;
     }
+
+    double localNowMs = [self.timeProvider nowMs];
     if (localNowMs <= 0.0) {
-        if (self.timeProvider) {
-            localNowMs = [self.timeProvider machToMs:pongRecvMach];
-        } else {
-            return;
-        }
+        return;
     }
-    double localTimeAtServerSent = localNowMs - (rttMs / 2.0);
 
-    [self.delegate socketHandler:self didReceiveTimeSyncServerMs:serverSystemMs atLocalTimeMs:localTimeAtServerSent];
+    if (data.length >= sizeof(int32_t) * 2) {
+        int32_t latencySec = 0;
+        int32_t latencyUsec = 0;
+        [data getBytes:&latencySec range:NSMakeRange(0, 4)];
+        [data getBytes:&latencyUsec range:NSMakeRange(4, 4)];
+        latencySec = CFSwapInt32LittleToHost(latencySec);
+        latencyUsec = CFSwapInt32LittleToHost(latencyUsec);
+        double latencyMs = (latencySec * 1000.0) + (latencyUsec / 1000.0);
+        double s2cMs = localNowMs - serverSystemMs;
+        double offset = (latencyMs - s2cMs) / 2.0;
+        [self.timeProvider updateOffsetWithDiff:offset];
+    } else {
+        uint64_t rttMach = pongRecvMach - _lastPingMach;
+        double rttMs = [self.timeProvider machToMs:rttMach];
+        double localTimeAtServerSent = localNowMs - (rttMs / 2.0);
+        [self.delegate socketHandler:self didReceiveTimeSyncServerMs:serverSystemMs atLocalTimeMs:localTimeAtServerSent];
+    }
 }
 
 @end

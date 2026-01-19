@@ -33,6 +33,9 @@ typedef BOOL (^TimeProviderAudioClockBlock)(double *audioNowMs, uint64_t *hostTi
 // Returns whether the audio clock source is currently available.
 - (BOOL)isAudioClockAvailable;
 
+// Updates the time offset directly using a computed offset (server - local).
+- (void)updateOffsetWithDiff:(double)offset;
+
 /// Updates the time offset.
 /// @param serverTimeMs The server time in milliseconds.
 /// @param localTimeMs The local mach time in milliseconds when the server time was valid.
