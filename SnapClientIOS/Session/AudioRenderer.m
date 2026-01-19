@@ -139,6 +139,7 @@
 @property (nonatomic, assign) double shortMedianAgeMs;
 @property (nonatomic, assign) int32_t correctAfterXFrames;
 @property (nonatomic, assign) uint32_t playedFrames;
+@property (nonatomic, assign) CFAbsoluteTime lastRestartTime;
 @property (nonatomic, strong) MedianBuffer *bufferMedian;
 @property (nonatomic, strong) MedianBuffer *shortBuffer;
 @property (nonatomic, strong) MedianBuffer *miniBuffer;
@@ -174,6 +175,7 @@
         self.shortMedianAgeMs = 0.0;
         self.correctAfterXFrames = 0;
         self.playedFrames = 0;
+        self.lastRestartTime = 0.0;
         self.bufferMedian = [[MedianBuffer alloc] initWithCapacity:500];
         self.shortBuffer = [[MedianBuffer alloc] initWithCapacity:100];
         self.miniBuffer = [[MedianBuffer alloc] initWithCapacity:20];
@@ -253,10 +255,14 @@
     AVAudioSessionInterruptionType type = (AVAudioSessionInterruptionType)[typeValue unsignedIntegerValue];
     if (type == AVAudioSessionInterruptionTypeBegan) {
         NSLog(@"AudioSession interruption: began");
+        self.isPlaying = NO;
     } else if (type == AVAudioSessionInterruptionTypeEnded) {
         NSNumber *optionValue = note.userInfo[AVAudioSessionInterruptionOptionKey];
         AVAudioSessionInterruptionOptions options = (AVAudioSessionInterruptionOptions)[optionValue unsignedIntegerValue];
         NSLog(@"AudioSession interruption: ended (options=%lu)", (unsigned long)options);
+        if (options & AVAudioSessionInterruptionOptionShouldResume) {
+            [self restartPlaybackWithReason:@"interruption ended"];
+        }
     } else {
         NSLog(@"AudioSession interruption: unknown (%lu)", (unsigned long)type);
     }
@@ -270,6 +276,43 @@
 
 - (void)handleEngineConfigurationChange:(NSNotification *)note {
     NSLog(@"AudioEngine configuration change");
+    [self restartPlaybackWithReason:@"engine configuration change"];
+}
+
+- (void)restartPlaybackWithReason:(NSString *)reason {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        CFAbsoluteTime now = CFAbsoluteTimeGetCurrent();
+        if (now - self.lastRestartTime < 1.0) {
+            return;
+        }
+        self.lastRestartTime = now;
+
+        NSLog(@"AudioRenderer: restart playback (%@)", reason);
+
+        AVAudioSession *session = [AVAudioSession sharedInstance];
+        NSError *error = nil;
+        [session setActive:YES error:&error];
+        if (error) {
+            NSLog(@"Error reactivating session: %@", error);
+        }
+
+        if (self.engine) {
+            [self.playerNode stop];
+            [self.engine stop];
+            if (![self.engine startAndReturnError:&error]) {
+                NSLog(@"Error restarting AVAudioEngine: %@", error);
+                return;
+            }
+        }
+
+        self.isPlaying = NO;
+        self.nextPlayTimeMs = 0.0;
+        self.nextPlaySampleTime = 0.0;
+        self.hardSync = YES;
+        self.playedFrames = 0;
+        [self resetSyncBuffers];
+        [self startPlaybackIfNeeded];
+    });
 }
 
 - (void)dealloc {
