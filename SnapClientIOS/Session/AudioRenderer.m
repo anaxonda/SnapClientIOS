@@ -132,6 +132,7 @@
 @property (nonatomic, assign) float currentVolume;
 @property (nonatomic, assign) BOOL isMuted;
 @property (nonatomic, assign) double nextPlayTimeMs;
+@property (nonatomic, assign) double nextPlaySampleTime;
 @property (nonatomic, assign) BOOL isPlaying;
 @property (nonatomic, assign) BOOL hardSync;
 @property (nonatomic, assign) double medianAgeMs;
@@ -167,6 +168,7 @@
         self.currentChunk = nil;
         self.isPlaying = NO;
         self.nextPlayTimeMs = 0.0;
+        self.nextPlaySampleTime = 0.0;
         self.hardSync = YES;
         self.medianAgeMs = 0.0;
         self.shortMedianAgeMs = 0.0;
@@ -288,7 +290,7 @@
 }
 
 - (void)updatePlaybackBuffer {
-    NSInteger playback = self.serverBufferMs - self.clientLatencyMs - self.localPlayerLatencyMs;
+    NSInteger playback = self.serverBufferMs - self.clientLatencyMs;
     if (playback < 0) {
         playback = 0;
     }
@@ -336,6 +338,7 @@
     }
     self.isPlaying = YES;
     self.nextPlayTimeMs = [self.timeProvider nowMs] + 100.0;
+    self.nextPlaySampleTime = 0.0;
     self.hardSync = YES;
     self.playedFrames = 0;
     [self resetSyncBuffers];
@@ -355,8 +358,7 @@
     buffer.frameLength = self.bufferFrameCount;
 
     double nowMs = [self.timeProvider nowMs];
-    double hwLatencyMs = [AVAudioSession sharedInstance].outputLatency * 1000.0;
-    double outputBufferDacTimeMs = (self.nextPlayTimeMs - nowMs) + hwLatencyMs;
+    double outputBufferDacTimeMs = [self estimateOutputBufferDacTimeMs:nowMs];
     [self fillBuffer:buffer outputBufferDacTimeMs:outputBufferDacTimeMs];
 
     uint64_t hostTime = [self.timeProvider msToMach:self.nextPlayTimeMs];
@@ -376,6 +378,49 @@
     }];
 
     self.nextPlayTimeMs += self.bufferDurationMs;
+    if (self.nextPlaySampleTime > 0.0) {
+        self.nextPlaySampleTime += (double)self.bufferFrameCount;
+    }
+}
+
+- (double)estimateOutputBufferDacTimeMs:(double)nowMs {
+    double hwLatencyMs = [AVAudioSession sharedInstance].outputLatency * 1000.0;
+    double sampleRate = self.streamInfo.sampleRate;
+    if (sampleRate <= 0.0) {
+        return (self.nextPlayTimeMs - nowMs) + self.localPlayerLatencyMs + hwLatencyMs + 15.0;
+    }
+
+    double currentSampleTime = 0.0;
+    if ([self getCurrentSampleTime:&currentSampleTime]) {
+        if (self.nextPlaySampleTime <= 0.0) {
+            double deltaMs = self.nextPlayTimeMs - nowMs;
+            double deltaFrames = (deltaMs / 1000.0) * sampleRate;
+            self.nextPlaySampleTime = currentSampleTime + deltaFrames;
+        }
+        double queueFrames = self.nextPlaySampleTime - currentSampleTime;
+        if (queueFrames < 0.0) {
+            queueFrames = 0.0;
+        }
+        double queueMs = (queueFrames / sampleRate) * 1000.0;
+        return queueMs + self.localPlayerLatencyMs + hwLatencyMs + 15.0;
+    }
+
+    return (self.nextPlayTimeMs - nowMs) + self.localPlayerLatencyMs + hwLatencyMs + 15.0;
+}
+
+- (BOOL)getCurrentSampleTime:(double *)sampleTime {
+    AVAudioTime *nodeTime = self.playerNode.lastRenderTime;
+    if (!nodeTime || nodeTime.hostTime == 0) {
+        return NO;
+    }
+    AVAudioTime *playerTime = [self.playerNode playerTimeForNodeTime:nodeTime];
+    if (!playerTime || playerTime.sampleRate <= 0 || playerTime.sampleTime < 0) {
+        return NO;
+    }
+    if (sampleTime) {
+        *sampleTime = (double)playerTime.sampleTime;
+    }
+    return YES;
 }
 
 - (void)fillBuffer:(AVAudioPCMBuffer *)buffer outputBufferDacTimeMs:(double)outputBufferDacTimeMs {
