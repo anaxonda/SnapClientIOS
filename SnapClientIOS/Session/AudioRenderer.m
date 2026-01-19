@@ -159,7 +159,7 @@
         self.clientLatencyMs = 0;
         self.localPlayerLatencyMs = 0;
         [self updatePlaybackBuffer];
-        self.bufferDurationMs = 20.0;
+        self.bufferDurationMs = 40.0;
         [self updateBufferFrameCount];
         self.audioBufferCount = 3;
         self.currentVolume = 1.0;

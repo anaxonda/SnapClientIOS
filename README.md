@@ -21,6 +21,12 @@ Baseline commit (good audio output):
 - TIME sync uses payload latency with diff = (c2s - s2c) / 2, plus a quick-sync burst (50 pings at 100ms).
 - Audio output is stable in recent testing; timing aligns with other clients.
 
+Current parity changes vs `b855421`:
+- Scheduling cadence is now 40 ms instead of 80 ms.
+- Output DAC time estimate uses player sample timeline + IO buffer + output latency + 15 ms (snapclient CoreAudio-style), not just `nextPlayTime - now + outputLatency`.
+- Playback buffer math matches snapclient (`serverBufferMs - clientLatencyMs`); local latency is only in the DAC-time estimate.
+- Socket read logic remains the same as `b855421` (no refactor).
+
 Possible future refinements (if timing or stability regresses):
 - Align TIME message handling with reference clients (latency payload + header field ordering) for tighter clock sync.
 - Reconcile buffer/latency math with snapweb/snapclient (`bufferMs = serverBufferMs - clientLatency`) and local audio latency handling.
