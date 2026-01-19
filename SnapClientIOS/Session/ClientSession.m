@@ -9,6 +9,8 @@
 #import "AudioRenderer.h"
 #import "TimeProvider.h"
 #import "RpcHandler.h"
+#import <AVFoundation/AVFoundation.h>
+#import <UIKit/UIKit.h>
 #include <mach/mach.h>
 #include <mach/mach_time.h>
 @import MediaPlayer;
@@ -26,6 +28,7 @@
 @property (assign, nonatomic) NSInteger cachedBufferMs;
 @property (assign, nonatomic) NSInteger cachedLatency;
 @property (assign, nonatomic) NSInteger quickSyncRemaining;
+@property (assign, nonatomic) CFAbsoluteTime lastTimeSyncRestart;
 
 @end
 
@@ -54,6 +57,7 @@
 }
 
 - (void)start {
+    [self registerForResumeNotifications];
     self.quickSyncRemaining = 50;
     [self startQuickSyncTimer];
     [self.rpcHandler connect];
@@ -100,6 +104,53 @@
                                                      repeats:YES];
 }
 
+- (void)registerForResumeNotifications {
+    NSNotificationCenter *center = [NSNotificationCenter defaultCenter];
+    [center addObserver:self selector:@selector(handleAppDidBecomeActive:) name:UIApplicationDidBecomeActiveNotification object:nil];
+    [center addObserver:self selector:@selector(handleAppWillEnterForeground:) name:UIApplicationWillEnterForegroundNotification object:nil];
+    [center addObserver:self selector:@selector(handleAudioSessionInterruption:) name:AVAudioSessionInterruptionNotification object:[AVAudioSession sharedInstance]];
+}
+
+- (void)handleAppWillEnterForeground:(NSNotification *)note {
+    [self restartTimeSyncWithReason:@"foreground"];
+}
+
+- (void)handleAppDidBecomeActive:(NSNotification *)note {
+    [self restartTimeSyncWithReason:@"app active"];
+}
+
+- (void)handleAudioSessionInterruption:(NSNotification *)note {
+    NSNumber *typeValue = note.userInfo[AVAudioSessionInterruptionTypeKey];
+    if (!typeValue) {
+        return;
+    }
+    AVAudioSessionInterruptionType type = (AVAudioSessionInterruptionType)[typeValue unsignedIntegerValue];
+    if (type != AVAudioSessionInterruptionTypeEnded) {
+        return;
+    }
+    NSNumber *optionValue = note.userInfo[AVAudioSessionInterruptionOptionKey];
+    AVAudioSessionInterruptionOptions options = (AVAudioSessionInterruptionOptions)[optionValue unsignedIntegerValue];
+    if (options & AVAudioSessionInterruptionOptionShouldResume) {
+        [self restartTimeSyncWithReason:@"interruption ended"];
+    }
+}
+
+- (void)restartTimeSyncWithReason:(NSString *)reason {
+    CFAbsoluteTime now = CFAbsoluteTimeGetCurrent();
+    if (now - self.lastTimeSyncRestart < 1.0) {
+        return;
+    }
+    self.lastTimeSyncRestart = now;
+    NSLog(@"ClientSession: restart time sync (%@)", reason);
+    [self.timeProvider reset];
+    [self.syncTimer invalidate];
+    self.syncTimer = nil;
+    [self stopQuickSyncTimer];
+    self.quickSyncRemaining = 50;
+    [self startQuickSyncTimer];
+    [self sendSync];
+}
+
 - (void)setStreamId:(NSString *)streamId forGroupId:(NSString *)groupId {
     [self.rpcHandler setStreamId:streamId forGroupId:groupId];
 }
@@ -107,6 +158,7 @@
 - (void)dealloc {
     [self.syncTimer invalidate];
     [self stopQuickSyncTimer];
+    [[NSNotificationCenter defaultCenter] removeObserver:self];
 }
 
 #pragma mark - SocketHandlerDelegate
