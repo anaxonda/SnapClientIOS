@@ -99,7 +99,10 @@
     }
     // Diff = Server - Local
     double offset = serverTimeMs - localTimeMs;
-    
+    [self updateOffsetWithDiff:offset];
+}
+
+- (void)updateOffsetWithDiff:(double)offset {
     [self.diffBuffer addObject:@(offset)];
     
     // Median Filter (Size 100)
