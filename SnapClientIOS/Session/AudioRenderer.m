@@ -124,6 +124,7 @@
 @property (nonatomic, strong) AVAudioFormat *audioFormat;
 @property (nonatomic, assign) NSInteger serverBufferMs;
 @property (nonatomic, assign) NSInteger clientLatencyMs;
+@property (nonatomic, assign) NSInteger localPlayerLatencyMs;
 @property (nonatomic, assign) NSInteger playbackBufferMs;
 @property (nonatomic, assign) double bufferDurationMs;
 @property (nonatomic, assign) AVAudioFrameCount bufferFrameCount;
@@ -131,6 +132,7 @@
 @property (nonatomic, assign) float currentVolume;
 @property (nonatomic, assign) BOOL isMuted;
 @property (nonatomic, assign) double nextPlayTimeMs;
+@property (nonatomic, assign) double nextPlaySampleTime;
 @property (nonatomic, assign) BOOL isPlaying;
 @property (nonatomic, assign) BOOL hardSync;
 @property (nonatomic, assign) double medianAgeMs;
@@ -155,6 +157,7 @@
         self.timeProvider = timeProvider;
         self.serverBufferMs = 1000;
         self.clientLatencyMs = 0;
+        self.localPlayerLatencyMs = 0;
         [self updatePlaybackBuffer];
         self.bufferDurationMs = 80.0;
         [self updateBufferFrameCount];
@@ -165,6 +168,7 @@
         self.currentChunk = nil;
         self.isPlaying = NO;
         self.nextPlayTimeMs = 0.0;
+        self.nextPlaySampleTime = 0.0;
         self.hardSync = YES;
         self.medianAgeMs = 0.0;
         self.shortMedianAgeMs = 0.0;
@@ -184,8 +188,15 @@
     self.serverBufferMs = bufferMs;
     self.clientLatencyMs = latencyMs;
     [self updatePlaybackBuffer];
-    NSLog(@"AudioRenderer: Server buffer=%ldms, client latency=%ldms, playback buffer=%ldms",
-          (long)self.serverBufferMs, (long)self.clientLatencyMs, (long)self.playbackBufferMs);
+    NSLog(@"AudioRenderer: Server buffer=%ldms, client latency=%ldms, local latency=%ldms, playback buffer=%ldms",
+          (long)self.serverBufferMs, (long)self.clientLatencyMs, (long)self.localPlayerLatencyMs, (long)self.playbackBufferMs);
+}
+
+- (void)setLocalPlayerLatencyMs:(NSInteger)latencyMs {
+    self.localPlayerLatencyMs = latencyMs;
+    [self updatePlaybackBuffer];
+    NSLog(@"AudioRenderer: Local latency=%ldms, playback buffer=%ldms",
+          (long)self.localPlayerLatencyMs, (long)self.playbackBufferMs);
 }
 
 - (void)setVolume:(float)volume {
@@ -284,7 +295,7 @@
 }
 
 - (void)updatePlaybackBuffer {
-    NSInteger playback = self.serverBufferMs - self.clientLatencyMs;
+    NSInteger playback = self.serverBufferMs - self.clientLatencyMs - self.localPlayerLatencyMs;
     if (playback < 0) {
         playback = 0;
     }
@@ -311,6 +322,41 @@
     self.shortMedianAgeMs = 0.0;
 }
 
+- (double)estimateOutputBufferDacTimeMs:(double)nowMs {
+    double hwLatencyMs = [AVAudioSession sharedInstance].outputLatency * 1000.0;
+    double currentSampleTime = 0.0;
+    BOOL hasSampleTime = [self getCurrentSampleTime:&currentSampleTime];
+    if (hasSampleTime) {
+        if (self.nextPlaySampleTime <= 0.0) {
+            double deltaMs = self.nextPlayTimeMs - nowMs;
+            double deltaFrames = (deltaMs / 1000.0) * self.streamInfo.sampleRate;
+            self.nextPlaySampleTime = currentSampleTime + deltaFrames;
+        }
+        double queueFrames = self.nextPlaySampleTime - currentSampleTime;
+        if (queueFrames < 0.0) {
+            queueFrames = 0.0;
+        }
+        double queueMs = (queueFrames / self.streamInfo.sampleRate) * 1000.0;
+        return queueMs + hwLatencyMs + 15.0;
+    }
+    return (self.nextPlayTimeMs - nowMs) + hwLatencyMs;
+}
+
+- (BOOL)getCurrentSampleTime:(double *)sampleTime {
+    AVAudioTime *nodeTime = self.playerNode.lastRenderTime;
+    if (!nodeTime || nodeTime.hostTime == 0) {
+        return NO;
+    }
+    AVAudioTime *playerTime = [self.playerNode playerTimeForNodeTime:nodeTime];
+    if (!playerTime || playerTime.sampleRate <= 0 || playerTime.sampleTime < 0) {
+        return NO;
+    }
+    if (sampleTime) {
+        *sampleTime = (double)playerTime.sampleTime;
+    }
+    return YES;
+}
+
 - (void)setRealSampleRate:(double)sampleRate {
     double nominalRate = self.streamInfo.sampleRate;
     if (nominalRate <= 0.0 || fabs(sampleRate - nominalRate) < 0.000001) {
@@ -332,6 +378,7 @@
     }
     self.isPlaying = YES;
     self.nextPlayTimeMs = [self.timeProvider nowMs] + 100.0;
+    self.nextPlaySampleTime = 0.0;
     self.hardSync = YES;
     self.playedFrames = 0;
     [self resetSyncBuffers];
@@ -351,8 +398,7 @@
     buffer.frameLength = self.bufferFrameCount;
 
     double nowMs = [self.timeProvider nowMs];
-    double hwLatencyMs = [AVAudioSession sharedInstance].outputLatency * 1000.0;
-    double outputBufferDacTimeMs = (self.nextPlayTimeMs - nowMs) + hwLatencyMs;
+    double outputBufferDacTimeMs = [self estimateOutputBufferDacTimeMs:nowMs];
     [self fillBuffer:buffer outputBufferDacTimeMs:outputBufferDacTimeMs];
 
     uint64_t hostTime = [self.timeProvider msToMach:self.nextPlayTimeMs];
@@ -372,6 +418,9 @@
     }];
 
     self.nextPlayTimeMs += self.bufferDurationMs;
+    if (self.nextPlaySampleTime > 0.0) {
+        self.nextPlaySampleTime += (double)self.bufferFrameCount;
+    }
 }
 
 - (void)fillBuffer:(AVAudioPCMBuffer *)buffer outputBufferDacTimeMs:(double)outputBufferDacTimeMs {
@@ -384,6 +433,17 @@
     NSUInteger channels = self.streamInfo.channels;
     for (NSUInteger ch = 0; ch < channels; ch++) {
         memset(dst[ch], 0, frames * sizeof(float));
+    }
+
+    if (outputBufferDacTimeMs > self.playbackBufferMs) {
+        static CFAbsoluteTime lastLog = 0;
+        CFAbsoluteTime nowTime = CFAbsoluteTimeGetCurrent();
+        if (nowTime - lastLog >= 5.0) {
+            NSLog(@"AudioRenderer: outputBufferDacTime %.2fms > buffer %.2fms",
+                  outputBufferDacTimeMs, (double)self.playbackBufferMs);
+            lastLog = nowTime;
+        }
+        return;
     }
 
     double serverNowMs = [self.timeProvider serverNowMs];
