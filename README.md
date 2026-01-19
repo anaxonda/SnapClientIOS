@@ -11,7 +11,8 @@ Current behavior:
 - TIME sync uses payload latency when present (offset = (latencyMs - s2cMs) / 2) and RTT fallback otherwise.
 - Quick-sync burst sends 50 TIME pings at 20ms, then switches to a 1s cadence.
 - Scheduling cadence uses 40ms buffers; playback buffer is `serverBufferMs - clientLatencyMs`.
-- Output DAC time estimate uses the player timeline + output latency + 15ms offset.
+- Output DAC time estimate uses the player timeline + output latency + 15ms offset (IO buffer duration is measured but not applied).
+- Rationale: including IO buffer duration biased the estimate later and made this client consistently lag other snapclients; the queued audio timeline already accounts for buffering and snapclient CoreAudio does not add IO buffer duration there.
 - AVAudioSession is configured with the stream sample rate and a 40ms preferred IO buffer duration; actual session values are logged at startup.
 
 Status:
