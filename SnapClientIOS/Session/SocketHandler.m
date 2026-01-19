@@ -50,9 +50,9 @@ typedef enum : uint16_t {
         _delegate = delegate;
     _nextMessageId = 0;
     
-    queue = dispatch_queue_create("ljk.snapclientios.socketqueue", NULL);
-    processingQueue = dispatch_queue_create("ljk.snapclientios.socketprocessing", NULL);
-    self.socket = [[GCDAsyncSocket alloc] initWithDelegate:self delegateQueue:queue];
+        queue = dispatch_queue_create("ljk.snapclientios.socketqueue", NULL);
+        processingQueue = dispatch_queue_create("ljk.snapclientios.socketprocessing", NULL);
+        self.socket = [[GCDAsyncSocket alloc] initWithDelegate:self delegateQueue:processingQueue];
         [self.socket performBlock:^{
             [self.socket enableBackgroundingOnSocket];
         }];
