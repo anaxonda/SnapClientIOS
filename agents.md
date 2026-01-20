@@ -6,7 +6,7 @@ SnapClientIOS is a legacy Objective-C client for the Snapcast multi-room audio s
 ### Core Components
 *   **SocketHandler (Port 1704)**: Manages the binary Snapstream protocol. It handles the initial handshake (Hello), parses server settings, processes time-synchronization pings, and extracts FLAC audio chunks and metadata (StreamTags).
 *   **RpcHandler (Port 1705)**: Manages the JSON-RPC Control protocol. It allows the app to fetch server status, discover available streams, and change the source for the client's group.
-*   **TimeProvider**: A monotonic clock synchronization engine. It calculates the offset between the server's clock and the iPad's `mach_absolute_time` using an NTP-style median filter (100-sample window).
+*   **TimeProvider**: A monotonic clock synchronization engine. It calculates the offset between the server's clock and the iPad's `mach_absolute_time` using an NTP-style median filter (200-sample window).
 *   **FlacDecoder**: A wrapper around `libFLAC` that decodes 16-bit interleaved audio chunks into Float32 non-interleaved PCM.
 *   **AudioRenderer**: Built on `AVAudioEngine`. It uses an `AVAudioPlayerNode` to schedule decoded buffers at precise `AVAudioTime` (hostTime) points.
 
@@ -46,7 +46,9 @@ Despite the math being theoretically sound, the app consistently plays **several
 ---
 
 ## 4. Sync Investigation Log
-Current HEAD: see `git rev-parse --short HEAD` (latest re-anchor + DAC logging)
+Current HEAD: `43f0ad9` (re-anchor fixes + sync log updates)
+Update policy:
+- After each commit/build that affects sync behavior or diagnostics, update this section's HEAD and the "Tried" list.
 
 Crash cluster (post `b855421`):
 - `cf34ee5`, `bc23e38`, `4f89a0b`, `2702439` socket read queue refactor; reverted in `19b08b4`
@@ -64,7 +66,7 @@ Tried (commit -> summary):
 - `65bb165` off-main sync timers + sync logging (ClientSession)
 - `9ef41cc` log sync stats for drift diagnosis (AudioRenderer)
 - `5acde08` log DAC estimate details (AudioRenderer)
-- `d0057ba` re-anchor DAC queue estimate when behind/periodically (AudioRenderer)
+- `43f0ad9` re-anchor DAC queue estimate when behind/periodically + sync log updates (AudioRenderer, agents.md)
 
 Snapclient parity notes:
 - Uses steady timer for TIME sync; median offset smoothing; baseline drift correction thresholds
@@ -76,7 +78,7 @@ Architecture note:
 
 Completed checklist:
 - [x] Move sync timers off main runloop (dispatch_source_t on dedicated queue) (`65bb165`)
-- [x] Re-anchor `nextPlaySampleTime` when behind and periodically (`d0057ba`)
+- [x] Re-anchor `nextPlaySampleTime` when behind and periodically (`43f0ad9`)
 
 Next experiments (untried):
 - [ ] Validate TIME vs WIRE_CHUNK timebase alignment; add targeted logging for `serverNowMs`, `chunk.startMs`, `ageMs`, `outputBufferDacTimeMs`
