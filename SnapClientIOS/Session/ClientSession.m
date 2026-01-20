@@ -15,6 +15,8 @@
 #include <mach/mach_time.h>
 @import MediaPlayer;
 
+static void *kSyncQueueKey = &kSyncQueueKey;
+
 @interface ClientSession () <SocketHandlerDelegate, FlacDecoderDelegate, RpcHandlerDelegate>
 
 @property (strong, nonatomic) SocketHandler *socketHandler;
@@ -22,13 +24,15 @@
 @property (strong, nonatomic) FlacDecoder *flacDecoder;
 @property (strong, nonatomic) AudioRenderer *audioRenderer;
 @property (strong, nonatomic) TimeProvider *timeProvider;
-@property (strong, nonatomic) NSTimer *syncTimer;
+@property (strong, nonatomic) dispatch_queue_t syncQueue;
 @property (strong, nonatomic) dispatch_source_t quickSyncTimer;
+@property (strong, nonatomic) dispatch_source_t steadySyncTimer;
 
 @property (assign, nonatomic) NSInteger cachedBufferMs;
 @property (assign, nonatomic) NSInteger cachedLatency;
 @property (assign, nonatomic) NSInteger quickSyncRemaining;
 @property (assign, nonatomic) CFAbsoluteTime lastTimeSyncRestart;
+@property (assign, nonatomic) CFAbsoluteTime lastSteadySyncLog;
 
 @end
 
@@ -40,7 +44,10 @@
         _port = port;
         self.cachedBufferMs = 1000;
         self.cachedLatency = 0;
+        self.lastSteadySyncLog = 0;
         self.timeProvider = [[TimeProvider alloc] init];
+        self.syncQueue = dispatch_queue_create("ljk.snapclientios.syncqueue", DISPATCH_QUEUE_SERIAL);
+        dispatch_queue_set_specific(self.syncQueue, kSyncQueueKey, kSyncQueueKey, NULL);
         self.socketHandler = [[SocketHandler alloc] initWithSnapServerHost:host port:port delegate:self];
         self.socketHandler.timeProvider = self.timeProvider;
         self.rpcHandler = [[RpcHandler alloc] initWithHost:host port:1705];
@@ -58,50 +65,50 @@
 
 - (void)start {
     [self registerForResumeNotifications];
-    self.quickSyncRemaining = 50;
-    [self startQuickSyncTimer];
+    [self withSyncQueue:^{
+        self.quickSyncRemaining = 50;
+        [self startQuickSyncTimerLocked];
+    }];
     [self.rpcHandler connect];
     [MPNowPlayingInfoCenter defaultCenter].nowPlayingInfo = @{MPMediaItemPropertyTitle: @"Snapcast"};
 }
 
 - (void)sendSync {
-    [self.socketHandler sendTime];
-    if (self.quickSyncRemaining > 0) {
-        self.quickSyncRemaining--;
-        if (self.quickSyncRemaining == 0) {
-            [self stopQuickSyncTimer];
-            [self startSyncTimerWithInterval:1.0];
+    [self withSyncQueue:^{
+        [self.socketHandler sendTime];
+        if (self.quickSyncRemaining > 0) {
+            self.quickSyncRemaining--;
+            if (self.quickSyncRemaining == 0) {
+                NSLog(@"ClientSession: quick sync complete, switching to steady sync");
+                [self stopQuickSyncTimerLocked];
+                [self startSyncTimerWithIntervalLocked:1.0];
+            }
+        } else {
+            CFAbsoluteTime now = CFAbsoluteTimeGetCurrent();
+            if (now - self.lastSteadySyncLog >= 5.0) {
+                self.lastSteadySyncLog = now;
+                NSLog(@"ClientSession: steady sync ping");
+            }
         }
-    }
+    }];
 }
 
 - (void)startQuickSyncTimer {
-    [self stopQuickSyncTimer];
-    dispatch_queue_t queue = dispatch_get_main_queue();
-    self.quickSyncTimer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, queue);
-    uint64_t intervalNs = (uint64_t)(0.02 * NSEC_PER_SEC);
-    dispatch_source_set_timer(self.quickSyncTimer, dispatch_time(DISPATCH_TIME_NOW, 0), intervalNs, intervalNs / 2);
-    __weak typeof(self) weakSelf = self;
-    dispatch_source_set_event_handler(self.quickSyncTimer, ^{
-        [weakSelf sendSync];
-    });
-    dispatch_resume(self.quickSyncTimer);
+    [self withSyncQueue:^{
+        [self startQuickSyncTimerLocked];
+    }];
 }
 
 - (void)stopQuickSyncTimer {
-    if (self.quickSyncTimer) {
-        dispatch_source_cancel(self.quickSyncTimer);
-        self.quickSyncTimer = nil;
-    }
+    [self withSyncQueue:^{
+        [self stopQuickSyncTimerLocked];
+    }];
 }
 
 - (void)startSyncTimerWithInterval:(NSTimeInterval)interval {
-    [self.syncTimer invalidate];
-    self.syncTimer = [NSTimer scheduledTimerWithTimeInterval:interval
-                                                      target:self
-                                                    selector:@selector(sendSync)
-                                                    userInfo:nil
-                                                     repeats:YES];
+    [self withSyncQueue:^{
+        [self startSyncTimerWithIntervalLocked:interval];
+    }];
 }
 
 - (void)registerForResumeNotifications {
@@ -142,13 +149,14 @@
     }
     self.lastTimeSyncRestart = now;
     NSLog(@"ClientSession: restart time sync (%@)", reason);
-    [self.timeProvider reset];
-    [self.syncTimer invalidate];
-    self.syncTimer = nil;
-    [self stopQuickSyncTimer];
-    self.quickSyncRemaining = 50;
-    [self startQuickSyncTimer];
-    [self sendSync];
+    [self withSyncQueue:^{
+        [self.timeProvider reset];
+        [self stopSyncTimerLocked];
+        [self stopQuickSyncTimerLocked];
+        self.quickSyncRemaining = 50;
+        [self startQuickSyncTimerLocked];
+        [self sendSync];
+    }];
 }
 
 - (void)setStreamId:(NSString *)streamId forGroupId:(NSString *)groupId {
@@ -156,9 +164,73 @@
 }
 
 - (void)dealloc {
-    [self.syncTimer invalidate];
-    [self stopQuickSyncTimer];
+    [self stopAllSyncTimers];
     [[NSNotificationCenter defaultCenter] removeObserver:self];
+}
+
+#pragma mark - Sync Timers
+
+- (void)withSyncQueue:(dispatch_block_t)block {
+    if (dispatch_get_specific(kSyncQueueKey)) {
+        block();
+    } else {
+        dispatch_async(self.syncQueue, block);
+    }
+}
+
+- (void)stopAllSyncTimers {
+    if (dispatch_get_specific(kSyncQueueKey)) {
+        [self stopQuickSyncTimerLocked];
+        [self stopSyncTimerLocked];
+    } else {
+        dispatch_sync(self.syncQueue, ^{
+            [self stopQuickSyncTimerLocked];
+            [self stopSyncTimerLocked];
+        });
+    }
+}
+
+- (void)startQuickSyncTimerLocked {
+    [self stopQuickSyncTimerLocked];
+    self.quickSyncTimer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, self.syncQueue);
+    uint64_t intervalNs = (uint64_t)(0.02 * NSEC_PER_SEC);
+    dispatch_source_set_timer(self.quickSyncTimer, dispatch_time(DISPATCH_TIME_NOW, 0), intervalNs, intervalNs / 2);
+    NSLog(@"ClientSession: quick sync start (50 pings @ 20ms)");
+    __weak typeof(self) weakSelf = self;
+    dispatch_source_set_event_handler(self.quickSyncTimer, ^{
+        [weakSelf sendSync];
+    });
+    dispatch_resume(self.quickSyncTimer);
+}
+
+- (void)stopQuickSyncTimerLocked {
+    if (self.quickSyncTimer) {
+        dispatch_source_cancel(self.quickSyncTimer);
+        self.quickSyncTimer = nil;
+        NSLog(@"ClientSession: quick sync stop");
+    }
+}
+
+- (void)startSyncTimerWithIntervalLocked:(NSTimeInterval)interval {
+    [self stopSyncTimerLocked];
+    self.steadySyncTimer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, self.syncQueue);
+    uint64_t intervalNs = (uint64_t)(interval * NSEC_PER_SEC);
+    dispatch_source_set_timer(self.steadySyncTimer, dispatch_time(DISPATCH_TIME_NOW, intervalNs), intervalNs, intervalNs / 10);
+    self.lastSteadySyncLog = 0;
+    NSLog(@"ClientSession: steady sync start (interval=%.2fs)", interval);
+    __weak typeof(self) weakSelf = self;
+    dispatch_source_set_event_handler(self.steadySyncTimer, ^{
+        [weakSelf sendSync];
+    });
+    dispatch_resume(self.steadySyncTimer);
+}
+
+- (void)stopSyncTimerLocked {
+    if (self.steadySyncTimer) {
+        dispatch_source_cancel(self.steadySyncTimer);
+        self.steadySyncTimer = nil;
+        NSLog(@"ClientSession: steady sync stop");
+    }
 }
 
 #pragma mark - SocketHandlerDelegate
