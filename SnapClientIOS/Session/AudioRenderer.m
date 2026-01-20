@@ -141,6 +141,7 @@
 @property (nonatomic, assign) uint32_t playedFrames;
 @property (nonatomic, assign) CFAbsoluteTime lastRestartTime;
 @property (nonatomic, assign) CFAbsoluteTime lastSyncLogTime;
+@property (nonatomic, assign) CFAbsoluteTime lastDacLogTime;
 @property (nonatomic, strong) MedianBuffer *bufferMedian;
 @property (nonatomic, strong) MedianBuffer *shortBuffer;
 @property (nonatomic, strong) MedianBuffer *miniBuffer;
@@ -178,6 +179,7 @@
         self.playedFrames = 0;
         self.lastRestartTime = 0.0;
         self.lastSyncLogTime = 0.0;
+        self.lastDacLogTime = 0.0;
         self.bufferMedian = [[MedianBuffer alloc] initWithCapacity:500];
         self.shortBuffer = [[MedianBuffer alloc] initWithCapacity:100];
         self.miniBuffer = [[MedianBuffer alloc] initWithCapacity:20];
@@ -435,7 +437,16 @@
     double hwLatencyMs = [AVAudioSession sharedInstance].outputLatency * 1000.0;
     double sampleRate = self.streamInfo.sampleRate;
     if (sampleRate <= 0.0) {
-        return (self.nextPlayTimeMs - nowMs) + hwLatencyMs + 15.0;
+        double fallbackMs = (self.nextPlayTimeMs - nowMs) + hwLatencyMs + 15.0;
+        [self logDacEstimateWithMode:@"no-samplerate"
+                         sampleRate:sampleRate
+                   currentSampleTime:0.0
+                     nextSampleTime:self.nextPlaySampleTime
+                          queueFrames:0.0
+                             queueMs:0.0
+                           hwLatencyMs:hwLatencyMs
+                             dacTimeMs:fallbackMs];
+        return fallbackMs;
     }
 
     double currentSampleTime = 0.0;
@@ -450,10 +461,28 @@
             queueFrames = 0.0;
         }
         double queueMs = (queueFrames / sampleRate) * 1000.0;
-        return queueMs + hwLatencyMs + 15.0;
+        double dacMs = queueMs + hwLatencyMs + 15.0;
+        [self logDacEstimateWithMode:@"sampletime"
+                         sampleRate:sampleRate
+                   currentSampleTime:currentSampleTime
+                     nextSampleTime:self.nextPlaySampleTime
+                          queueFrames:queueFrames
+                             queueMs:queueMs
+                           hwLatencyMs:hwLatencyMs
+                             dacTimeMs:dacMs];
+        return dacMs;
     }
 
-    return (self.nextPlayTimeMs - nowMs) + hwLatencyMs + 15.0;
+    double fallbackMs = (self.nextPlayTimeMs - nowMs) + hwLatencyMs + 15.0;
+    [self logDacEstimateWithMode:@"fallback"
+                     sampleRate:sampleRate
+               currentSampleTime:0.0
+                 nextSampleTime:self.nextPlaySampleTime
+                      queueFrames:0.0
+                         queueMs:0.0
+                       hwLatencyMs:hwLatencyMs
+                         dacTimeMs:fallbackMs];
+    return fallbackMs;
 }
 
 - (BOOL)getCurrentSampleTime:(double *)sampleTime {
@@ -469,6 +498,23 @@
         *sampleTime = (double)playerTime.sampleTime;
     }
     return YES;
+}
+
+- (void)logDacEstimateWithMode:(NSString *)mode
+                    sampleRate:(double)sampleRate
+              currentSampleTime:(double)currentSampleTime
+                nextSampleTime:(double)nextSampleTime
+                     queueFrames:(double)queueFrames
+                        queueMs:(double)queueMs
+                      hwLatencyMs:(double)hwLatencyMs
+                        dacTimeMs:(double)dacTimeMs {
+    CFAbsoluteTime now = CFAbsoluteTimeGetCurrent();
+    if (now - self.lastDacLogTime < 5.0) {
+        return;
+    }
+    self.lastDacLogTime = now;
+    NSLog(@"AudioRenderer: dac estimate mode=%@ sr=%.1f current=%.0f next=%.0f queueFrames=%.0f queueMs=%.2f hw=%.2f dac=%.2f nextPlay=%.2f",
+          mode, sampleRate, currentSampleTime, nextSampleTime, queueFrames, queueMs, hwLatencyMs, dacTimeMs, self.nextPlayTimeMs);
 }
 
 - (void)logSyncStatsIfNeededWithServerNowMs:(double)serverNowMs
