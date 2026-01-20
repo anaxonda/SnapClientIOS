@@ -140,6 +140,7 @@
 @property (nonatomic, assign) int32_t correctAfterXFrames;
 @property (nonatomic, assign) uint32_t playedFrames;
 @property (nonatomic, assign) CFAbsoluteTime lastRestartTime;
+@property (nonatomic, assign) CFAbsoluteTime lastSyncLogTime;
 @property (nonatomic, strong) MedianBuffer *bufferMedian;
 @property (nonatomic, strong) MedianBuffer *shortBuffer;
 @property (nonatomic, strong) MedianBuffer *miniBuffer;
@@ -176,6 +177,7 @@
         self.correctAfterXFrames = 0;
         self.playedFrames = 0;
         self.lastRestartTime = 0.0;
+        self.lastSyncLogTime = 0.0;
         self.bufferMedian = [[MedianBuffer alloc] initWithCapacity:500];
         self.shortBuffer = [[MedianBuffer alloc] initWithCapacity:100];
         self.miniBuffer = [[MedianBuffer alloc] initWithCapacity:20];
@@ -469,6 +471,23 @@
     return YES;
 }
 
+- (void)logSyncStatsIfNeededWithServerNowMs:(double)serverNowMs
+                                    startMs:(double)startMs
+                                      ageMs:(double)ageMs
+                       outputBufferDacTimeMs:(double)outputBufferDacTimeMs
+                                   hardSync:(BOOL)hardSync {
+    CFAbsoluteTime now = CFAbsoluteTimeGetCurrent();
+    if (now - self.lastSyncLogTime < 5.0) {
+        return;
+    }
+    self.lastSyncLogTime = now;
+    double rawAgeMs = serverNowMs - startMs;
+    double miniMedian = [self.miniBuffer median];
+    NSLog(@"AudioRenderer: sync stats hard=%d rawAge=%.2f age=%.2f dac=%.2f playback=%.0f serverNow=%.2f start=%.2f nextPlay=%.2f med=%.2f short=%.2f mini=%.2f",
+          hardSync ? 1 : 0, rawAgeMs, ageMs, outputBufferDacTimeMs, (double)self.playbackBufferMs,
+          serverNowMs, startMs, self.nextPlayTimeMs, self.medianAgeMs, self.shortMedianAgeMs, miniMedian);
+}
+
 - (void)fillBuffer:(AVAudioPCMBuffer *)buffer outputBufferDacTimeMs:(double)outputBufferDacTimeMs {
     AVAudioFrameCount frames = buffer.frameLength;
     if (frames == 0 || self.streamInfo.sampleRate <= 0) {
@@ -499,6 +518,11 @@
 
     if (self.hardSync) {
         double ageMs = serverNowMs - [chunk startMs] - self.playbackBufferMs + outputBufferDacTimeMs;
+        [self logSyncStatsIfNeededWithServerNowMs:serverNowMs
+                                          startMs:[chunk startMs]
+                                            ageMs:ageMs
+                             outputBufferDacTimeMs:outputBufferDacTimeMs
+                                         hardSync:YES];
         if (ageMs < -reqChunkDurationMs) {
             return;
         }
@@ -563,6 +587,11 @@
     }
 
     double ageMs = serverNowMs - startMs - self.playbackBufferMs + outputBufferDacTimeMs;
+    [self logSyncStatsIfNeededWithServerNowMs:serverNowMs
+                                      startMs:startMs
+                                        ageMs:ageMs
+                         outputBufferDacTimeMs:outputBufferDacTimeMs
+                                     hardSync:NO];
     [self.bufferMedian addValue:ageMs];
     [self.shortBuffer addValue:ageMs];
     [self.miniBuffer addValue:ageMs];
