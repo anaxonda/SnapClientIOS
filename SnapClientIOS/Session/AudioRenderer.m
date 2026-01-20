@@ -142,6 +142,7 @@
 @property (nonatomic, assign) CFAbsoluteTime lastRestartTime;
 @property (nonatomic, assign) CFAbsoluteTime lastSyncLogTime;
 @property (nonatomic, assign) CFAbsoluteTime lastDacLogTime;
+@property (nonatomic, assign) CFAbsoluteTime lastAnchorTime;
 @property (nonatomic, strong) MedianBuffer *bufferMedian;
 @property (nonatomic, strong) MedianBuffer *shortBuffer;
 @property (nonatomic, strong) MedianBuffer *miniBuffer;
@@ -180,6 +181,7 @@
         self.lastRestartTime = 0.0;
         self.lastSyncLogTime = 0.0;
         self.lastDacLogTime = 0.0;
+        self.lastAnchorTime = 0.0;
         self.bufferMedian = [[MedianBuffer alloc] initWithCapacity:500];
         self.shortBuffer = [[MedianBuffer alloc] initWithCapacity:100];
         self.miniBuffer = [[MedianBuffer alloc] initWithCapacity:20];
@@ -434,6 +436,9 @@
 }
 
 - (double)estimateOutputBufferDacTimeMs:(double)nowMs {
+    static const CFAbsoluteTime kReanchorCooldownSec = 1.0;
+    static const CFAbsoluteTime kPeriodicReanchorSec = 30.0;
+
     double hwLatencyMs = [AVAudioSession sharedInstance].outputLatency * 1000.0;
     double sampleRate = self.streamInfo.sampleRate;
     if (sampleRate <= 0.0) {
@@ -442,10 +447,11 @@
                          sampleRate:sampleRate
                    currentSampleTime:0.0
                      nextSampleTime:self.nextPlaySampleTime
-                          queueFrames:0.0
-                             queueMs:0.0
-                           hwLatencyMs:hwLatencyMs
-                             dacTimeMs:fallbackMs];
+                      queueFrames:0.0
+                      rawQueueFrames:0.0
+                         queueMs:0.0
+                       hwLatencyMs:hwLatencyMs
+                         dacTimeMs:fallbackMs];
         return fallbackMs;
     }
 
@@ -455,8 +461,34 @@
             double deltaMs = self.nextPlayTimeMs - nowMs;
             double deltaFrames = (deltaMs / 1000.0) * sampleRate;
             self.nextPlaySampleTime = currentSampleTime + deltaFrames;
+            self.lastAnchorTime = CFAbsoluteTimeGetCurrent();
         }
-        double queueFrames = self.nextPlaySampleTime - currentSampleTime;
+
+        double rawQueueFrames = self.nextPlaySampleTime - currentSampleTime;
+        CFAbsoluteTime now = CFAbsoluteTimeGetCurrent();
+        if (rawQueueFrames < 0.0 && (now - self.lastAnchorTime) >= kReanchorCooldownSec) {
+            double deltaMs = self.nextPlayTimeMs - nowMs;
+            double deltaFrames = (deltaMs / 1000.0) * sampleRate;
+            self.nextPlaySampleTime = currentSampleTime + deltaFrames;
+            self.lastAnchorTime = now;
+            rawQueueFrames = self.nextPlaySampleTime - currentSampleTime;
+            NSLog(@"AudioRenderer: reanchor reason=behind rawQueueFrames=%.0f current=%.0f next=%.0f",
+                  rawQueueFrames, currentSampleTime, self.nextPlaySampleTime);
+        } else if ((now - self.lastAnchorTime) >= kPeriodicReanchorSec) {
+            double deltaMs = self.nextPlayTimeMs - nowMs;
+            double deltaFrames = (deltaMs / 1000.0) * sampleRate;
+            double targetNextSample = currentSampleTime + deltaFrames;
+            double deltaFramesToTarget = targetNextSample - self.nextPlaySampleTime;
+            double thresholdFrames = MAX((double)self.bufferFrameCount, sampleRate * 0.01);
+            if (fabs(deltaFramesToTarget) > thresholdFrames) {
+                self.nextPlaySampleTime = targetNextSample;
+                self.lastAnchorTime = now;
+                rawQueueFrames = self.nextPlaySampleTime - currentSampleTime;
+                NSLog(@"AudioRenderer: reanchor reason=periodic deltaFrames=%.0f current=%.0f next=%.0f",
+                      deltaFramesToTarget, currentSampleTime, self.nextPlaySampleTime);
+            }
+        }
+        double queueFrames = rawQueueFrames;
         if (queueFrames < 0.0) {
             queueFrames = 0.0;
         }
@@ -466,10 +498,11 @@
                          sampleRate:sampleRate
                    currentSampleTime:currentSampleTime
                      nextSampleTime:self.nextPlaySampleTime
-                          queueFrames:queueFrames
-                             queueMs:queueMs
-                           hwLatencyMs:hwLatencyMs
-                             dacTimeMs:dacMs];
+                      queueFrames:queueFrames
+                      rawQueueFrames:rawQueueFrames
+                         queueMs:queueMs
+                       hwLatencyMs:hwLatencyMs
+                         dacTimeMs:dacMs];
         return dacMs;
     }
 
@@ -478,10 +511,11 @@
                      sampleRate:sampleRate
                currentSampleTime:0.0
                  nextSampleTime:self.nextPlaySampleTime
-                      queueFrames:0.0
-                         queueMs:0.0
-                       hwLatencyMs:hwLatencyMs
-                         dacTimeMs:fallbackMs];
+                  queueFrames:0.0
+                  rawQueueFrames:0.0
+                     queueMs:0.0
+                   hwLatencyMs:hwLatencyMs
+                     dacTimeMs:fallbackMs];
     return fallbackMs;
 }
 
@@ -505,6 +539,7 @@
               currentSampleTime:(double)currentSampleTime
                 nextSampleTime:(double)nextSampleTime
                      queueFrames:(double)queueFrames
+                     rawQueueFrames:(double)rawQueueFrames
                         queueMs:(double)queueMs
                       hwLatencyMs:(double)hwLatencyMs
                         dacTimeMs:(double)dacTimeMs {
@@ -513,8 +548,8 @@
         return;
     }
     self.lastDacLogTime = now;
-    NSLog(@"AudioRenderer: dac estimate mode=%@ sr=%.1f current=%.0f next=%.0f queueFrames=%.0f queueMs=%.2f hw=%.2f dac=%.2f nextPlay=%.2f",
-          mode, sampleRate, currentSampleTime, nextSampleTime, queueFrames, queueMs, hwLatencyMs, dacTimeMs, self.nextPlayTimeMs);
+    NSLog(@"AudioRenderer: dac estimate mode=%@ sr=%.1f current=%.0f next=%.0f rawQueueFrames=%.0f queueFrames=%.0f queueMs=%.2f hw=%.2f dac=%.2f nextPlay=%.2f",
+          mode, sampleRate, currentSampleTime, nextSampleTime, rawQueueFrames, queueFrames, queueMs, hwLatencyMs, dacTimeMs, self.nextPlayTimeMs);
 }
 
 - (void)logSyncStatsIfNeededWithServerNowMs:(double)serverNowMs
