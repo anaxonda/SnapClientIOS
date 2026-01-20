@@ -466,17 +466,19 @@
 
         double rawQueueFrames = self.nextPlaySampleTime - currentSampleTime;
         CFAbsoluteTime now = CFAbsoluteTimeGetCurrent();
+        double timeToNextMs = self.nextPlayTimeMs - nowMs;
         if (rawQueueFrames < 0.0 && (now - self.lastAnchorTime) >= kReanchorCooldownSec) {
-            double deltaMs = self.nextPlayTimeMs - nowMs;
-            double deltaFrames = (deltaMs / 1000.0) * sampleRate;
+            double leadMs = self.bufferDurationMs * MAX(self.audioBufferCount, 2);
+            timeToNextMs = MAX(timeToNextMs, leadMs);
+            self.nextPlayTimeMs = nowMs + timeToNextMs;
+            double deltaFrames = (timeToNextMs / 1000.0) * sampleRate;
             self.nextPlaySampleTime = currentSampleTime + deltaFrames;
             self.lastAnchorTime = now;
             rawQueueFrames = self.nextPlaySampleTime - currentSampleTime;
-            NSLog(@"AudioRenderer: reanchor reason=behind rawQueueFrames=%.0f current=%.0f next=%.0f",
-                  rawQueueFrames, currentSampleTime, self.nextPlaySampleTime);
+            NSLog(@"AudioRenderer: reanchor reason=behind rawQueueFrames=%.0f current=%.0f next=%.0f nextPlay=%.2f",
+                  rawQueueFrames, currentSampleTime, self.nextPlaySampleTime, self.nextPlayTimeMs);
         } else if ((now - self.lastAnchorTime) >= kPeriodicReanchorSec) {
-            double deltaMs = self.nextPlayTimeMs - nowMs;
-            double deltaFrames = (deltaMs / 1000.0) * sampleRate;
+            double deltaFrames = (timeToNextMs / 1000.0) * sampleRate;
             double targetNextSample = currentSampleTime + deltaFrames;
             double deltaFramesToTarget = targetNextSample - self.nextPlaySampleTime;
             double thresholdFrames = MAX((double)self.bufferFrameCount, sampleRate * 0.01);
@@ -484,8 +486,8 @@
                 self.nextPlaySampleTime = targetNextSample;
                 self.lastAnchorTime = now;
                 rawQueueFrames = self.nextPlaySampleTime - currentSampleTime;
-                NSLog(@"AudioRenderer: reanchor reason=periodic deltaFrames=%.0f current=%.0f next=%.0f",
-                      deltaFramesToTarget, currentSampleTime, self.nextPlaySampleTime);
+                NSLog(@"AudioRenderer: reanchor reason=periodic deltaFrames=%.0f current=%.0f next=%.0f nextPlay=%.2f",
+                      deltaFramesToTarget, currentSampleTime, self.nextPlaySampleTime, self.nextPlayTimeMs);
             }
         }
         double queueFrames = rawQueueFrames;

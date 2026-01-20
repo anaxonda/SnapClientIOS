@@ -45,14 +45,53 @@ Despite the math being theoretically sound, the app consistently plays **several
 
 ---
 
-## 4. Agent Roles
+## 4. Sync Investigation Log
+Current HEAD: see `git rev-parse --short HEAD` (latest re-anchor + DAC logging)
+
+Crash cluster (post `b855421`):
+- `cf34ee5`, `bc23e38`, `4f89a0b`, `2702439` socket read queue refactor; reverted in `19b08b4`
+
+Tried (commit -> summary):
+- `b855421` snapclient-style sync + drift correction (AudioRenderer/TimeProvider/SocketHandler/ClientSession)
+- `f53f6ba` TIME payload for clock sync (SocketHandler/TimeProvider)
+- `4413e34` monotonic timebase + quick sync (TimeProvider/ClientSession)
+- `76d2005` queue-based DAC estimate + local latency subtraction (AudioRenderer)
+- `cb2ff38` IO buffer duration in playback buffer; dropped queue-based DAC; cadence 20ms (AudioRenderer)
+- `03822d1` restore queue-based DAC estimate like snapclient; remove local latency subtraction (AudioRenderer)
+- `e57d6a7` cadence 40ms (AudioRenderer)
+- `659a789` remove IO buffer term from DAC estimate (AudioRenderer)
+- `028d398`, `4404acc`, `7a557ba` interruption/resume handling + time sync gating (AudioRenderer/ClientSession/TimeProvider)
+- `65bb165` off-main sync timers + sync logging (ClientSession)
+- `9ef41cc` log sync stats for drift diagnosis (AudioRenderer)
+- `5acde08` log DAC estimate details (AudioRenderer)
+- `d0057ba` re-anchor DAC queue estimate when behind/periodically (AudioRenderer)
+
+Snapclient parity notes:
+- Uses steady timer for TIME sync; median offset smoothing; baseline drift correction thresholds
+- Uses per-callback output latency in players (e.g., Oboe/ALSA/Pipewire)
+- No explicit TIME vs WIRE_CHUNK timebase validation; no sample-time re-anchoring
+Architecture note:
+- Snapclient pulls audio per callback and measures output latency from the backend timestamp.
+- This client schedules buffers ahead of time and infers queue depth from `nextPlayTimeMs`/`nextPlaySampleTime`, so stale estimates can drift unless re-anchored.
+
+Completed checklist:
+- [x] Move sync timers off main runloop (dispatch_source_t on dedicated queue) (`65bb165`)
+- [x] Re-anchor `nextPlaySampleTime` when behind and periodically (`d0057ba`)
+
+Next experiments (untried):
+- [ ] Validate TIME vs WIRE_CHUNK timebase alignment; add targeted logging for `serverNowMs`, `chunk.startMs`, `ageMs`, `outputBufferDacTimeMs`
+- [ ] Add skew/clock-rate estimation or reduce median window in `TimeProvider`
+- [ ] Measure output latency per callback (AVAudioTime/AudioUnit) to align with snapclient
+- [ ] Add drift watchdog or more aggressive correction thresholds
+
+## 5. Agent Roles
 *   **@BuildMaster**: Manages the `macos-14` CI environment, ensuring `CODE_SIGNING_ALLOWED=NO` and manual IPA packaging remains functional.
 *   **@ObjC_Dev**: Handles the migration from `AudioQueue` to `AVAudioEngine` and the manual Int16 -> Float32 conversion logic.
 *   **@Guide**: Architectures the synchronization math and reverse-engineers the Snapcast protocol variations.
 
 ---
 
-## 5. Build & Download Workflow
+## 6. Build & Download Workflow
 Since the app is built on GitHub Actions (macOS runner) but managed from Linux, use the following sequence to build and retrieve the IPA:
 
 ### 1. Trigger Build
@@ -87,5 +126,5 @@ The resulting `SnapClientIOS.ipa` is now ready for installation via **Legacy-iOS
 
 ---
 
-## 6. Rollback Notes
+## 7. Rollback Notes
 - If we need to revert the local prebuffer/queue guard experiment, roll back to commit `d81fbd6` (the last build before `3b071d5`).
